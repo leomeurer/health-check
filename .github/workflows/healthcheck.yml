@@ -1,20 +1,15 @@
 name: Health Check MEC
 
-# Solução TEMPORÁRIA para ver o painel funcionando sem precisar de um
-# servidor próprio. O GitHub Actions não garante cron de 1 minuto, então
-# aqui rodamos a cada 5 minutos (mínimo prático) e, mesmo assim, o
-# agendador é "melhor esforço": execuções podem atrasar ou ser puladas.
-# Por isso esta demo NÃO serve para apurar glosa — o painel mostra a
-# cobertura real dos dados justamente para deixar isso explícito. Quando o
-# servidor/VM definitivo estiver pronto, use o daemon + systemd (ver
-# README.md) para ter checagem de 1 em 1 minuto de verdade.
+# Serviu como demo temporária até a VM definitiva (Oracle Cloud Always
+# Free, ver README.md) entrar no ar com checagem de 1 em 1 minuto de
+# verdade via systemd. O agendamento automático (`schedule`) foi
+# DESATIVADO em 19/09/2026 porque a VM passou a ser a fonte de verdade —
+# o cron daqui era "melhor esforço" e não servia para apurar glosa.
 #
-# Requer, uma única vez, em Settings do repositório:
-#   Pages > Build and deployment > Source = "GitHub Actions"
+# Mantido apenas `workflow_dispatch` para rodar manualmente se precisar
+# testar o pipeline de novo no futuro.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:
