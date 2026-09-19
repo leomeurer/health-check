@@ -51,10 +51,10 @@ jobs:
           restore-keys: healthcheck-db-
 
       - name: Roda a checagem dos sistemas
-        run: PYTHONPATH=src python -m healthcheck.daemon --once --config config.example.yaml
+        run: PYTHONPATH=src python -m healthcheck.daemon --once
 
       - name: Gera o painel HTML
-        run: PYTHONPATH=src python -m healthcheck.report --config config.example.yaml --output site/index.html
+        run: PYTHONPATH=src python -m healthcheck.report --output site/index.html
 
       - name: Sobe o painel como artifact do Pages
         uses: actions/upload-pages-artifact@v3

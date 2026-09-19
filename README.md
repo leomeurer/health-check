@@ -65,7 +65,7 @@ observada e validação de URL.
 
 ## Atenção: bloqueio por IP/WAF em alguns sistemas
 
-Ao testar a lista real de sistemas (`config.example.yaml`) a partir deste
+Ao testar a lista real de sistemas (`config.yaml`) a partir deste
 ambiente de desenvolvimento (que sai à internet por um IP de datacenter),
 4 dos 9 sistemas do MEC responderam **HTTP 403** de forma consistente
 (e-MEC, Sistec, SIMEC, GPEI), mesmo variando User-Agent/Accept/Referer —
@@ -88,7 +88,7 @@ como substituto no exemplo — confirme se é a página/sistema correto.
 ## Estrutura
 
 ```
-config.example.yaml        # copie para config.yaml e ajuste
+config.yaml                # sistemas monitorados e meta de SLA (versionado)
 src/healthcheck/
   config.py                 # leitura do config.yaml
   db.py                      # modelos SQLAlchemy (SQLite/Oracle)
@@ -111,8 +111,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-cp config.example.yaml config.yaml
-# edite config.yaml e preencha a lista real de sistemas em `targets`
+# a lista de sistemas e a meta de SLA já estão em config.yaml
 
 # roda uma única rodada de checagem (não fica em loop) — bom para validar
 PYTHONPATH=src python -m healthcheck.daemon --once
@@ -137,8 +136,7 @@ sudo ./.venv/bin/pip install -r requirements.txt
 # se o banco final for Oracle:
 sudo ./.venv/bin/pip install oracledb
 
-sudo cp config.example.yaml config.yaml
-sudo $EDITOR config.yaml   # preencher targets, sla.target_pct, etc.
+sudo $EDITOR config.yaml   # revisar targets e sla.target_pct
 sudo chown -R healthcheck:healthcheck /opt/health-check
 
 sudo cp systemd/*.service systemd/*.timer /etc/systemd/system/

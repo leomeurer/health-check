@@ -108,10 +108,9 @@ def _validate_url(url: str, target_key: str) -> str:
 def load_config(path: str | Path | None = None) -> Config:
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
     if not config_path.exists():
-        example = config_path.parent / "config.example.yaml"
         raise ConfigError(
             f"Arquivo de configuração não encontrado: {config_path}\n"
-            f"Copie {example.name} para {config_path.name} e ajuste os valores."
+            "Esperado na raiz do projeto, versionado junto com o código."
         )
 
     with open(config_path, encoding="utf-8") as f:

@@ -1,6 +1,9 @@
-# Copie este arquivo para config.yaml e ajuste os valores.
-# config.yaml fica fora do git (.gitignore) porque tende a conter URLs
-# internas e, futuramente, credenciais do banco Oracle.
+# Configuração do monitoramento. Este arquivo é versionado de propósito:
+# ele define O QUE é medido e COM QUAL META, que é justamente o que precisa
+# ficar rastreável para sustentar a apuração contratual.
+#
+# Credenciais NUNCA entram aqui: a connection string do Oracle é passada
+# pela variável de ambiente HEALTHCHECK_DB_URL (ver systemd/healthcheck.service).
 
 # --- Banco de dados -------------------------------------------------------
 # Para os testes iniciais, deixe como está (SQLite em arquivo local).
@@ -19,12 +22,11 @@ check:
   # (decisão registrada para fins de apuração de SLA/glosa).
 
 # --- SLA / Glosa contratual --------------------------------------------
-# Preencha com os valores reais do contrato quando definidos.
-# Enquanto "target_pct" estiver null, o relatório mostra a apuração de
-# uptime normalmente, mas NÃO calcula glosa (para não fabricar números
-# de um cálculo contratual que ainda não foi informado).
+# O painel compara o uptime do mês corrente contra esta meta e marca cada
+# sistema como cumprido / não cumprido. O VALOR da glosa não é calculado:
+# depende da cláusula contratual, que ainda não foi repassada.
 sla:
-  target_pct: null          # ex: 99.5
+  target_pct: 98.0          # meta de disponibilidade mensal, em %
   window: "monthly"         # janela de apuração: "monthly" (mês calendário) é a única suportada hoje
   timezone: "America/Sao_Paulo"  # fuso do contrato: define onde começa/termina o mês apurado
   # Fórmula de glosa é específica de cada contrato. Quando você tiver a
