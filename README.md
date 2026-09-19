@@ -29,6 +29,28 @@ SLA por sistema.
   calculado** — isso depende da cláusula exata do contrato e será
   implementado quando ela for repassada.
 
+## Atenção: bloqueio por IP/WAF em alguns sistemas
+
+Ao testar a lista real de sistemas (`config.example.yaml`) a partir deste
+ambiente de desenvolvimento (que sai à internet por um IP de datacenter),
+4 dos 9 sistemas do MEC responderam **HTTP 403** de forma consistente
+(e-MEC, Sistec, SIMEC, GPEI), mesmo variando User-Agent/Accept/Referer —
+o handshake TLS completa normalmente e quem responde 403 é o próprio
+servidor, não o proxy. Isso é característico de bloqueio por IP/ASN de
+nuvem na WAF (comum em sistemas de governo), não de um simples bot-check
+de headers.
+
+**Antes de confiar no painel para apuração de glosa**, rode
+`python -m healthcheck.daemon --once` a partir do servidor real onde o
+daemon vai ficar hospedado. Se esse servidor também estiver em nuvem
+pública, é bem provável que o mesmo bloqueio ocorra em produção — nesse
+caso será necessário solicitar à equipe responsável por cada sistema a
+liberação do IP do servidor de monitoramento na respectiva WAF/firewall.
+
+Também identifiquei que a URL informada para o Inep (`https://inep.gov.br`)
+não resolve (domínio inexistente); usei `https://www.gov.br/inep/pt-br`
+como substituto no exemplo — confirme se é a página/sistema correto.
+
 ## Estrutura
 
 ```

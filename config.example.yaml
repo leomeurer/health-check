@@ -37,16 +37,76 @@ sla:
 # name: nome de exibição no painel.
 # url: endpoint a ser checado (GET).
 # expected_status: lista de códigos HTTP aceitos como "no ar" (padrão: 200-399).
+#
+# IMPORTANTE — testado a partir deste ambiente (sandbox na nuvem, saindo por
+# um IP de datacenter) em 19/09/2026:
+#   OK (200): acesso_unico, gpe, inep_portal (URL corrigida, ver abaixo),
+#             mec_portal, avamec, acesso_govbr
+#   403 (bloqueado pelo WAF): emec, sistec, simec, gpei — o handshake TLS
+#             completa normalmente e o servidor responde 403 mesmo variando
+#             User-Agent/Accept/Referer, o que é característica de bloqueio
+#             por IP/ASN de nuvem (comum em WAF de governo, ex. Akamai/
+#             Incapsula), e não de um "bot check" simples de headers.
+#             ANTES de considerar esses sistemas indisponíveis no painel,
+#             rode `python -m healthcheck.daemon --once` a partir do
+#             servidor real onde o daemon vai ficar hospedado: se ele
+#             também estiver em nuvem pública (AWS/GCP/Azure/etc.), pode
+#             sofrer o mesmo bloqueio e será preciso pedir liberação do IP
+#             do servidor de monitoramento na WAF desses sistemas.
 targets:
+  - key: acesso_unico
+    name: "Portal Único de Acesso ao Ensino Superior (SiSU/ProUni/FIES)"
+    url: "https://acessounico.mec.gov.br/"
+
+  - key: emec
+    name: "e-MEC (Regulação da Educação Superior)"
+    url: "https://emec.mec.gov.br/"
+
+  - key: sistec
+    name: "Sistec (Sistema de Informações Técnicas)"
+    url: "https://sistec.mec.gov.br/"
+
+  - key: simec
+    name: "SIMEC (Monitoramento, Execução e Controle)"
+    url: "https://simec.mec.gov.br/"
+
+  - key: gpe
+    name: "MEC Gestão Presente na Escola (GPE)"
+    url: "https://gpe.gestaopresente.mec.gov.br/"
+
+  - key: gpei
+    name: "MEC Gestão Presente na Educação Infantil (GPEI)"
+    url: "https://gpei.mec.gov.br/"
+
+  - key: inep_portal
+    name: "Portal de Sistemas do Inep (Enem, Enade, etc.)"
+    # A URL informada (https://inep.gov.br) não resolve DNS (domínio
+    # inexistente). O endereço real do portal do Inep dentro do gov.br é
+    # este abaixo — confirme se é o sistema/página certa antes de contar
+    # com ela para o SLA.
+    url: "https://www.gov.br/inep/pt-br"
+
+  # Educacenso (Censo Escolar) foi informado com a mesma URL genérica do
+  # Inep acima. Se o Educacenso tiver uma URL própria (ex: um subdomínio
+  # de login/sistema), me passe o endereço específico para eu adicionar
+  # como um alvo separado — hoje o item "inep_portal" já cobre o portal
+  # institucional, mas não substitui o monitoramento do sistema em si.
+  # - key: educacenso
+  #   name: "Educacenso (Sistema do Censo Escolar)"
+  #   url: "https://TROCAR-PELA-URL-ESPECIFICA-DO-SISTEMA"
+
   - key: mec_portal
-    name: "Portal do MEC (exemplo)"
+    name: "Página Oficial do Ministério da Educação (MEC/Gov.br)"
     url: "https://www.gov.br/mec/pt-br"
 
-  # Exemplos de sistemas reais do MEC para você preencher com as URLs
-  # corretas quando tiver a lista oficial (SIMEC, SISU, e-MEC, FIES, etc.):
-  # - key: simec
-  #   name: "SIMEC"
-  #   url: "https://TROCAR-PELA-URL-REAL"
-  # - key: sisu
-  #   name: "Sisu"
-  #   url: "https://TROCAR-PELA-URL-REAL"
+  - key: avamec
+    name: "Ambiente Virtual de Aprendizagem (AVAMEC)"
+    url: "https://avamec.mec.gov.br/"
+
+  # Dependência crítica externa: quase todos os sistemas acima dependem do
+  # login unificado do gov.br. Se ele cair, os portais do MEC ficam
+  # inacessíveis para novos logins mesmo estando "no ar" tecnicamente —
+  # por isso ele entra na mesma árvore de monitoramento.
+  - key: acesso_govbr
+    name: "Provedor de Identidade Gov.br (Autenticação Unificada) — dependência SSO"
+    url: "https://acesso.gov.br"
