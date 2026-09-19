@@ -117,6 +117,7 @@ def build_report_data(config, session_factory, now) -> dict:
                     ),
                     "month_coverage_pct": month_summary.coverage_pct if month_summary else None,
                     "interval_label": format_duration(interval),
+                    "also_accept": sorted(target.also_accept),
                 }
             )
 

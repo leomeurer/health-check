@@ -74,12 +74,24 @@ servidor, não o proxy. Isso é característico de bloqueio por IP/ASN de
 nuvem na WAF (comum em sistemas de governo), não de um simples bot-check
 de headers.
 
+Verifiquei ainda que o 403 aparece em **todos** os caminhos desses
+sistemas (inclusive `/robots.txt` e `/favicon.ico`), então não há um
+endpoint de health que escape do WAF.
+
+**Tratamento adotado (`also_accept: [403]`).** Como o 403 prova que o
+serviço está de pé e respondendo, os 4 alvos bloqueados foram configurados
+para contar o 403 como "no ar". O painel exibe uma nota em cada um desses
+sistemas deixando o critério explícito, para a apuração ser auditável.
+É uma medida de "o serviço responde", não de "a página final carrega".
+
 **Antes de confiar no painel para apuração de glosa**, rode
 `python -m healthcheck.daemon --once` a partir do servidor real onde o
-daemon vai ficar hospedado. Se esse servidor também estiver em nuvem
-pública, é bem provável que o mesmo bloqueio ocorra em produção — nesse
-caso será necessário solicitar à equipe responsável por cada sistema a
-liberação do IP do servidor de monitoramento na respectiva WAF/firewall.
+daemon vai ficar hospedado. Se esse servidor **não** estiver em nuvem
+pública, esses sistemas passarão a responder 200 normalmente — e aí o
+`also_accept: [403]` deve ser **removido**, senão um 403 real (erro de
+fato) ficaria mascarado como disponível. O caminho ideal continua sendo
+pedir à equipe de cada sistema a liberação do IP do monitor na WAF e então
+tirar o 403 da configuração.
 
 Também identifiquei que a URL informada para o Inep (`https://inep.gov.br`)
 não resolve (domínio inexistente); usei `https://www.gov.br/inep/pt-br`

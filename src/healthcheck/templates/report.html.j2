@@ -103,6 +103,16 @@
   th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .empty { color: var(--muted); font-size: 13px; font-style: italic; }
   .ongoing { color: var(--down); font-weight: 600; }
+  .note-accept {
+    margin: 10px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    font-size: 12px;
+    line-height: 1.5;
+  }
   footer { color: var(--muted); font-size: 11px; margin-top: 24px; line-height: 1.6; }
 </style>
 </head>
@@ -150,6 +160,14 @@
     {% if status.last_status_code %} · HTTP {{ status.last_status_code }}{% endif %}
     {% if status.last_error %} · {{ status.last_error }}{% endif %}
     · cadência medida: {{ item.interval_label }}
+  </div>
+  {% endif %}
+
+  {% if item.also_accept %}
+  <div class="note-accept">
+    Critério ajustado: HTTP {{ item.also_accept | join(", ") }} conta como "no ar" para este
+    sistema (o WAF bloqueia o IP do monitor, então esse código apenas confirma que o serviço
+    está respondendo — não que a página final carregou).
   </div>
   {% endif %}
 

@@ -42,22 +42,30 @@ sla:
 # expected_status: (opcional) lista dos códigos HTTP que contam como "no ar".
 #      Se omitido, aceita qualquer código de 200 a 399. Se informado, SOMENTE
 #      os códigos listados são aceitos — ex: [200, 302] não aceita 301.
+# also_accept: (opcional) códigos extras aceitos ALÉM da regra acima. Usado
+#      abaixo para tratar o 403 do WAF como "serviço respondendo". O painel
+#      marca esses alvos, para a apuração de SLA ficar auditável.
 #
 # IMPORTANTE — testado a partir deste ambiente (sandbox na nuvem, saindo por
 # um IP de datacenter) em 19/09/2026:
 #   OK (200): acesso_unico, gpe, inep_portal (URL corrigida, ver abaixo),
 #             mec_portal, avamec, acesso_govbr
 #   403 (bloqueado pelo WAF): emec, sistec, simec, gpei — o handshake TLS
-#             completa normalmente e o servidor responde 403 mesmo variando
-#             User-Agent/Accept/Referer, o que é característica de bloqueio
-#             por IP/ASN de nuvem (comum em WAF de governo, ex. Akamai/
-#             Incapsula), e não de um "bot check" simples de headers.
-#             ANTES de considerar esses sistemas indisponíveis no painel,
-#             rode `python -m healthcheck.daemon --once` a partir do
-#             servidor real onde o daemon vai ficar hospedado: se ele
-#             também estiver em nuvem pública (AWS/GCP/Azure/etc.), pode
-#             sofrer o mesmo bloqueio e será preciso pedir liberação do IP
-#             do servidor de monitoramento na WAF desses sistemas.
+#             completa normalmente e o servidor responde 403 EM TODOS OS
+#             CAMINHOS (inclusive /robots.txt e /favicon.ico), o que é
+#             característica de bloqueio por IP/ASN de nuvem (WAF de governo,
+#             ex. Akamai/Incapsula), não de um "bot check" de headers. Não há
+#             endpoint de health que escape do WAF — tudo é 403.
+#
+#             DECISÃO (19/09/2026): como o 403 prova que o serviço está de pé
+#             e respondendo, esses 4 alvos recebem `also_accept: [403]`, ou
+#             seja, o 403 conta como "no ar". O painel sinaliza isso.
+#             ATENÇÃO ao rodar em produção: se o servidor definitivo NÃO
+#             estiver em nuvem pública, esses sistemas passarão a responder
+#             200, e aí o 403 deixaria de ser "WAF de pé" para ser um erro
+#             real mascarado. Reavalie o `also_accept` no deploy final —
+#             o ideal continua sendo pedir liberação do IP do monitor na WAF
+#             e então remover o 403 daqui.
 targets:
   - key: acesso_unico
     name: "Portal Único de Acesso ao Ensino Superior (SiSU/ProUni/FIES)"
@@ -66,14 +74,17 @@ targets:
   - key: emec
     name: "e-MEC (Regulação da Educação Superior)"
     url: "https://emec.mec.gov.br/"
+    also_accept: [403]   # WAF bloqueia o IP do monitor; 403 = serviço de pé
 
   - key: sistec
     name: "Sistec (Sistema de Informações Técnicas)"
     url: "https://sistec.mec.gov.br/"
+    also_accept: [403]   # WAF bloqueia o IP do monitor; 403 = serviço de pé
 
   - key: simec
     name: "SIMEC (Monitoramento, Execução e Controle)"
     url: "https://simec.mec.gov.br/"
+    also_accept: [403]   # WAF bloqueia o IP do monitor; 403 = serviço de pé
 
   - key: gpe
     name: "MEC Gestão Presente na Escola (GPE)"
@@ -82,6 +93,7 @@ targets:
   - key: gpei
     name: "MEC Gestão Presente na Educação Infantil (GPEI)"
     url: "https://gpei.mec.gov.br/"
+    also_accept: [403]   # WAF bloqueia o IP do monitor; 403 = serviço de pé
 
   - key: inep_portal
     name: "Portal de Sistemas do Inep (Enem, Enade, etc.)"

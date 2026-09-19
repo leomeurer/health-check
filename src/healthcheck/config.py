@@ -22,6 +22,12 @@ class Target:
     # None = aceita qualquer código 200-399. Caso contrário, apenas os
     # códigos explicitamente listados contam como "no ar".
     expected_status: frozenset[int] | None = None
+    # Códigos extras aceitos ALÉM da regra acima. Uso previsto: sistemas
+    # atrás de um WAF que responde 403 ao IP do monitor — aí o 403 prova
+    # que o serviço está de pé e respondendo, ainda que não sirva a página.
+    # Fica registrado por alvo (e exibido no painel) para a apuração ser
+    # auditável.
+    also_accept: frozenset[int] = frozenset()
 
 
 @dataclass
@@ -72,23 +78,33 @@ def _positive_int(section: dict, key: str, default: int, minimum: int) -> int:
     return value
 
 
-def _parse_expected_status(raw, target_key: str) -> frozenset[int] | None:
-    if raw is None:
-        return None
+def _parse_status_list(raw, field: str, target_key: str) -> frozenset[int]:
     if not isinstance(raw, (list, tuple)):
         raise ConfigError(
-            f"'expected_status' do sistema '{target_key}' deve ser uma lista de códigos HTTP, "
+            f"'{field}' do sistema '{target_key}' deve ser uma lista de códigos HTTP, "
             f"recebido: {raw!r}"
         )
     try:
         codes = frozenset(int(code) for code in raw)
     except (TypeError, ValueError) as exc:
         raise ConfigError(
-            f"'expected_status' do sistema '{target_key}' contém valor não numérico: {raw!r}"
+            f"'{field}' do sistema '{target_key}' contém valor não numérico: {raw!r}"
         ) from exc
     if not codes:
-        raise ConfigError(f"'expected_status' do sistema '{target_key}' está vazio.")
+        raise ConfigError(f"'{field}' do sistema '{target_key}' está vazio.")
     return codes
+
+
+def _parse_expected_status(raw, target_key: str) -> frozenset[int] | None:
+    if raw is None:
+        return None
+    return _parse_status_list(raw, "expected_status", target_key)
+
+
+def _parse_also_accept(raw, target_key: str) -> frozenset[int]:
+    if raw is None:
+        return frozenset()
+    return _parse_status_list(raw, "also_accept", target_key)
 
 
 def _validate_url(url: str, target_key: str) -> str:
@@ -172,6 +188,7 @@ def load_config(path: str | Path | None = None) -> Config:
                 name=name,
                 url=_validate_url(url, key),
                 expected_status=_parse_expected_status(t.get("expected_status"), key),
+                also_accept=_parse_also_accept(t.get("also_accept"), key),
             )
         )
 

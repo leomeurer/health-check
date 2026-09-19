@@ -135,3 +135,41 @@ def test_url_sem_esquema_e_rejeitada_na_configuracao():
 
 def test_url_valida_passa():
     assert _validate_url("https://acessounico.mec.gov.br/", "acesso_unico")
+
+
+def test_also_accept_trata_403_como_no_ar():
+    from healthcheck.checker import _status_accepted
+    from healthcheck.config import Target
+
+    bloqueado = Target(key="x", name="X", url="https://x.gov.br/", also_accept=frozenset({403}))
+    assert _status_accepted(403, bloqueado) is True
+    assert _status_accepted(200, bloqueado) is True
+    assert _status_accepted(500, bloqueado) is False
+
+
+def test_sem_also_accept_403_e_falha():
+    from healthcheck.checker import _status_accepted
+    from healthcheck.config import Target
+
+    normal = Target(key="x", name="X", url="https://x.gov.br/")
+    assert _status_accepted(403, normal) is False
+    assert _status_accepted(200, normal) is True
+
+
+def test_config_carrega_also_accept():
+    import tempfile
+
+    import yaml
+
+    from healthcheck.config import load_config
+
+    cfg = {
+        "targets": [
+            {"key": "emec", "name": "e-MEC", "url": "https://emec.mec.gov.br/", "also_accept": [403]}
+        ]
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(cfg, f)
+        path = f.name
+    loaded = load_config(path)
+    assert loaded.targets[0].also_accept == frozenset({403})

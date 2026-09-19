@@ -27,6 +27,8 @@ def _truncate(message: str) -> str:
 
 
 def _status_accepted(status_code: int, target: Target) -> bool:
+    if status_code in target.also_accept:
+        return True
     if target.expected_status is None:
         return 200 <= status_code <= 399
     return status_code in target.expected_status
