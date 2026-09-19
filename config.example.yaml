@@ -1,0 +1,52 @@
+# Copie este arquivo para config.yaml e ajuste os valores.
+# config.yaml fica fora do git (.gitignore) porque tende a conter URLs
+# internas e, futuramente, credenciais do banco Oracle.
+
+# --- Banco de dados -------------------------------------------------------
+# Para os testes iniciais, deixe como está (SQLite em arquivo local).
+# Para produção, troque pela connection string do Oracle, por exemplo:
+#   oracle+oracledb://usuario:senha@host:1521/?service_name=ORCLPDB1
+# (requer `pip install oracledb`). O restante do código não muda,
+# pois usa SQLAlchemy como camada de abstração.
+database:
+  url: "sqlite:///data/healthcheck.db"
+
+# --- Checagem ---------------------------------------------------------
+check:
+  interval_seconds: 60      # intervalo entre rodadas de checagem
+  timeout_seconds: 10       # timeout HTTP por sistema
+  # Critério de queda: 1 falha já conta como início de indisponibilidade
+  # (decisão registrada para fins de apuração de SLA/glosa).
+
+# --- SLA / Glosa contratual --------------------------------------------
+# Preencha com os valores reais do contrato quando definidos.
+# Enquanto "target_pct" estiver null, o relatório mostra a apuração de
+# uptime normalmente, mas NÃO calcula glosa (para não fabricar números
+# de um cálculo contratual que ainda não foi informado).
+sla:
+  target_pct: null          # ex: 99.5
+  window: "monthly"         # janela de apuração: "monthly" (mês calendário) é a única suportada hoje
+  # Fórmula de glosa é específica de cada contrato. Quando você tiver a
+  # cláusula, me avise para implementarmos o cálculo exato aqui
+  # (ex: percentual sobre o valor da fatura, faixas de desconto, etc.).
+  glosa_formula: null
+
+# --- Sistemas monitorados ----------------------------------------------
+# key: identificador curto e estável (não mude depois de começar a
+#      coletar dados, senão o histórico daquele sistema "quebra" em dois).
+# name: nome de exibição no painel.
+# url: endpoint a ser checado (GET).
+# expected_status: lista de códigos HTTP aceitos como "no ar" (padrão: 200-399).
+targets:
+  - key: mec_portal
+    name: "Portal do MEC (exemplo)"
+    url: "https://www.gov.br/mec/pt-br"
+
+  # Exemplos de sistemas reais do MEC para você preencher com as URLs
+  # corretas quando tiver a lista oficial (SIMEC, SISU, e-MEC, FIES, etc.):
+  # - key: simec
+  #   name: "SIMEC"
+  #   url: "https://TROCAR-PELA-URL-REAL"
+  # - key: sisu
+  #   name: "Sisu"
+  #   url: "https://TROCAR-PELA-URL-REAL"

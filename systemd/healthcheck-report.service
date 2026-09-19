@@ -1,0 +1,12 @@
+[Unit]
+Description=MEC Health Check - gera o painel HTML de uptime/downtime
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=healthcheck
+Group=healthcheck
+WorkingDirectory=/opt/health-check
+Environment=PYTHONPATH=/opt/health-check/src
+# Environment=HEALTHCHECK_DB_URL=oracle+oracledb://usuario:senha@host:1521/?service_name=ORCLPDB1
+ExecStart=/opt/health-check/.venv/bin/python -m healthcheck.report --config /opt/health-check/config.yaml --output /opt/health-check/data/report.html

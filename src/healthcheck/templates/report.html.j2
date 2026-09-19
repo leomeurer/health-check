@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel de Uptime - Sistemas MEC</title>
+<style>
+  :root {
+    --ok: #16a34a;
+    --down: #dc2626;
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --border: #e2e4e9;
+    --text: #1f2430;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  h1 { font-size: 22px; margin: 0 0 4px 0; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .target-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .target-name { font-size: 17px; font-weight: 600; }
+  .target-url { color: var(--muted); font-size: 12px; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .badge.up { background: #dcfce7; color: var(--ok); }
+  .badge.down { background: #fee2e2; color: var(--down); }
+  .badge::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .uptime-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .uptime-stat {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .uptime-stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .uptime-stat .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+  .uptime-stat .count { font-size: 11px; color: var(--muted); }
+  .sla-box {
+    margin: 12px 0;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .sla-box.met { background: #dcfce7; color: #14532d; }
+  .sla-box.not-met { background: #fee2e2; color: #7f1d1d; }
+  .sla-box.unset { background: #f1f5f9; color: var(--muted); }
+  .sparkline { margin: 12px 0; }
+  .sparkline .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  .ongoing { color: var(--down); font-weight: 600; }
+  footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
+</style>
+</head>
+<body>
+
+<h1>Painel de Uptime / Downtime — Sistemas MEC</h1>
+<div class="subtitle">
+  Gerado em {{ generated_at | fmt_dt }} · checagens a cada 1 minuto · critério de queda: 1 falha = indisponível
+  {% if not sla_configured %}
+  · meta de SLA ainda não configurada (config.yaml → sla.target_pct)
+  {% endif %}
+</div>
+
+{% for item in targets_data %}
+{% set t = item.target %}
+{% set status = item.status %}
+<div class="card">
+  <div class="target-header">
+    <div>
+      <div class="target-name">{{ t.name }}</div>
+      <div class="target-url">{{ t.url }}</div>
+    </div>
+    {% if status is none %}
+      <span class="badge down">SEM DADOS</span>
+    {% elif status.up %}
+      <span class="badge up">ONLINE</span>
+    {% else %}
+      <span class="badge down">OFFLINE desde {{ status.down_since | fmt_dt }}</span>
+    {% endif %}
+  </div>
+
+  {% if status is not none %}
+  <div class="target-url">
+    Última checagem: {{ status.last_checked_at | fmt_dt }}
+    {% if status.last_status_code %} · HTTP {{ status.last_status_code }}{% endif %}
+    {% if status.last_error %} · {{ status.last_error }}{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="uptime-grid">
+    {% for label, summary in item.uptime_by_window %}
+    <div class="uptime-stat">
+      <div class="label">{{ label }}</div>
+      <div class="value">{{ summary.uptime_pct | fmt_pct }}</div>
+      <div class="count">{{ summary.successful_checks }}/{{ summary.total_checks }} checagens</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if item.sla_summary %}
+    {% if item.sla_summary.met %}
+    <div class="sla-box met">
+      SLA cumprido no mês corrente: {{ item.sla_summary.actual_pct | fmt_pct }} ≥ meta de {{ item.sla_summary.target_pct }}%
+    </div>
+    {% else %}
+    <div class="sla-box not-met">
+      SLA NÃO cumprido no mês corrente: {{ item.sla_summary.actual_pct | fmt_pct }} &lt; meta de {{ item.sla_summary.target_pct }}%
+      (déficit de {{ "%.2f"|format(item.sla_summary.deficit_pct) }} p.p.) — cálculo de glosa ainda não implementado, ver config.yaml
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="sla-box unset">Meta de SLA não configurada para este sistema.</div>
+  {% endif %}
+
+  <div class="sparkline">
+    <div class="label">Últimas {{ item.sparkline | length }} checagens (mais recente à direita)</div>
+    <svg width="100%" height="24" viewBox="0 0 {{ item.sparkline | length * 7 }} 24" preserveAspectRatio="none">
+      {% for c in item.sparkline %}
+      <rect x="{{ loop.index0 * 7 }}" y="0" width="5" height="24"
+            fill="{{ '#16a34a' if c.success else '#dc2626' }}" />
+      {% endfor %}
+    </svg>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Incidente (início)</th><th>Fim</th><th>Duração</th></tr>
+    </thead>
+    <tbody>
+      {% for inc in item.incidents %}
+      <tr>
+        <td>{{ inc.start | fmt_dt }}</td>
+        <td>{% if inc.end %}{{ inc.end | fmt_dt }}{% else %}<span class="ongoing">em andamento</span>{% endif %}</td>
+        <td>{{ inc.duration_seconds | fmt_duration }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="empty">Nenhum incidente registrado nos últimos 30 dias.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+
+<footer>
+  Painel gerado automaticamente a partir do banco de checagens locais. Dados dos últimos 30 dias.
+</footer>
+
+</body>
+</html>

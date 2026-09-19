@@ -1,0 +1,9 @@
+[Unit]
+Description=Regera o painel HTML de uptime/downtime a cada 5 minutos
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
