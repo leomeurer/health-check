@@ -161,9 +161,81 @@ journalctl -u healthcheck.service -f
 ```
 
 O `report.html` fica em `/opt/health-check/data/report.html` e é
-regerado a cada 5 minutos pelo timer. Sirva esse arquivo com qualquer
-servidor web estático (nginx, Apache, etc.) apontando para essa pasta,
-ou copie-o periodicamente para onde for publicado.
+regerado a cada 5 minutos pelo timer. A seção seguinte mostra como
+publicá-lo numa VM gratuita da Oracle Cloud.
+
+## Deploy na Oracle Cloud Always Free (checagem de 1 min + painel público)
+
+Isto resolve, ao mesmo tempo, a checagem de 1 em 1 minuto de verdade (o
+GitHub Actions não garante isso) e um link fixo para ver o painel do
+celular. A VM Always Free da Oracle nunca expira e não tem custo
+recorrente.
+
+**1. Criar a VM** (no console da Oracle Cloud — isso só você consegue
+fazer, é a sua conta):
+- `Compute` → `Instances` → `Create instance`
+- Shape: escolha um dos marcados **"Always Free eligible"** (ex:
+  `VM.Standard.E2.1.Micro`, x86, 1 OCPU/1GB — suficiente para este daemon)
+- Imagem: Ubuntu (a mais recente LTS listada)
+- Em "Networking", mantenha a criação de uma VCN nova com IP público
+- Adicione sua chave SSH pública (ou deixe a Oracle gerar um par e baixe
+  a chave privada)
+- Create. Anote o **IP público** que aparece na página da instância.
+
+**2. Liberar a porta 80** (painel HTTP) e manter a 22 (SSH) — precisa
+mexer em DOIS lugares, é a pegadinha mais comum da Oracle Cloud:
+- No console: `Networking` → `Virtual Cloud Networks` → sua VCN →
+  `Security Lists` → a lista padrão → `Add Ingress Rules` →
+  Source CIDR `0.0.0.0/0`, IP Protocol `TCP`, Destination Port `80`
+- Dentro da própria VM (o Ubuntu da Oracle vem com `iptables` bloqueando
+  por padrão, além da Security List do console):
+  ```bash
+  sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+  sudo netfilter-persistent save   # ou: sudo apt install iptables-persistent
+  ```
+
+**3. Instalar o projeto na VM** (via SSH):
+```bash
+ssh ubuntu@<IP-publico-da-vm>
+
+sudo apt update && sudo apt install -y python3-venv python3-pip nginx git
+git clone https://github.com/leomeurer/health-check.git
+sudo useradd --system --home /opt/health-check --shell /usr/sbin/nologin healthcheck
+sudo mv health-check /opt/health-check
+cd /opt/health-check
+sudo python3 -m venv .venv
+sudo ./.venv/bin/pip install -r requirements.txt
+sudo chown -R healthcheck:healthcheck /opt/health-check
+```
+
+**4. Ativar a checagem de 1 em 1 minuto e a geração do painel:**
+```bash
+sudo cp systemd/*.service systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now healthcheck.service
+sudo systemctl enable --now healthcheck-report.timer
+
+# confirma que está coletando
+journalctl -u healthcheck.service -f
+```
+
+**5. Publicar com nginx** (HTTP público, sem senha — conforme decidido):
+```bash
+sudo cp nginx/healthcheck.conf /etc/nginx/sites-available/healthcheck.conf
+sudo ln -s /etc/nginx/sites-available/healthcheck.conf /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default   # remove a página padrão do nginx
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Pronto: `http://<IP-publico-da-vm>/` mostra o painel, atualizado a cada
+5 minutos, com checagem de verdade de 1 em 1 minuto por trás. Adicione
+esse IP aos favoritos do navegador do celular.
+
+**Nota de segurança:** por ser HTTP puro (sem HTTPS) e sem autenticação,
+qualquer pessoa com o IP vê os dados de disponibilidade dos sistemas do
+MEC. Foi a opção escolhida por simplicidade — se depois quiser adicionar
+HTTPS (precisa de um domínio, a Oracle não dá HTTPS de graça só com IP)
+ou autenticação básica no nginx, é uma mudança pequena a qualquer momento.
 
 ## Próximos passos combinados
 
