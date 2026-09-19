@@ -45,10 +45,9 @@ def run_round(config: Config, session_factory) -> None:
             target = future_to_target[future]
             try:
                 results[target.key] = future.result()
-            except Exception as exc:  # falha inesperada no próprio checker
+            except Exception:  # falha inesperada no próprio checker
                 log.exception("Erro inesperado checando %s", target.key)
                 results[target.key] = None
-                _ = exc
 
     now = utcnow()
     with session_factory() as session:

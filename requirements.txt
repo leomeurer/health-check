@@ -5,3 +5,6 @@ Jinja2>=3.1
 
 # Para produção com Oracle, instale também (não necessário para os testes com SQLite):
 # oracledb>=2.0
+
+# Testes
+pytest>=8.0

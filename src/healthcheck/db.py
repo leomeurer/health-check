@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, create_engine
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import PROJECT_ROOT
+
+ERROR_MAX_LEN = 500
 
 
 class Base(DeclarativeBase):
@@ -36,7 +38,7 @@ class Check(Base):
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(ERROR_MAX_LEN), nullable=True)
 
     __table_args__ = (
         Index("ix_checks_target_key_checked_at", "target_key", "checked_at"),
@@ -53,6 +55,8 @@ def _normalize_sqlite_url(db_url: str) -> str:
     rest = db_url[len(prefix):]
     if rest.startswith("/"):
         return db_url  # já é um caminho absoluto (sqlite:////...)
+    if not rest or rest.startswith(":memory:") or "mode=memory" in rest:
+        return db_url  # banco em memória não tem caminho em disco
 
     abs_path = (PROJECT_ROOT / rest).resolve()
     abs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,8 +65,21 @@ def _normalize_sqlite_url(db_url: str) -> str:
 
 def make_engine(db_url: str):
     db_url = _normalize_sqlite_url(db_url)
-    connect_args = {"check_same_thread": False} if db_url.startswith("sqlite:") else {}
-    return create_engine(db_url, connect_args=connect_args, future=True)
+    is_sqlite = db_url.startswith("sqlite:")
+    connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
+    engine = create_engine(db_url, connect_args=connect_args, future=True)
+
+    if is_sqlite:
+        # Sem WAL, a leitura longa do relatório bloqueia o commit do daemon e
+        # a rodada inteira é perdida ("database is locked").
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, _record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
+
+    return engine
 
 
 def init_db(engine) -> None:

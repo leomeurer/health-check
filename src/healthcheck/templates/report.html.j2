@@ -8,6 +8,7 @@
   :root {
     --ok: #16a34a;
     --down: #dc2626;
+    --warn: #b45309;
     --bg: #f4f5f7;
     --card-bg: #ffffff;
     --border: #e2e4e9;
@@ -23,7 +24,17 @@
     color: var(--text);
   }
   h1 { font-size: 22px; margin: 0 0 4px 0; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .method {
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    color: #312e81;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
   .card {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -37,10 +48,10 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
   .target-name { font-size: 17px; font-weight: 600; }
-  .target-url { color: var(--muted); font-size: 12px; }
+  .target-url { color: var(--muted); font-size: 12px; word-break: break-all; }
   .badge {
     display: inline-flex;
     align-items: center;
@@ -52,6 +63,7 @@
   }
   .badge.up { background: #dcfce7; color: var(--ok); }
   .badge.down { background: #fee2e2; color: var(--down); }
+  .badge.unknown { background: #f1f5f9; color: var(--muted); }
   .badge::before {
     content: "";
     width: 8px;
@@ -61,7 +73,7 @@
   }
   .uptime-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 12px;
     margin: 16px 0;
   }
@@ -72,12 +84,14 @@
   }
   .uptime-stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
   .uptime-stat .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
-  .uptime-stat .count { font-size: 11px; color: var(--muted); }
+  .uptime-stat .count { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .uptime-stat .coverage-low { color: var(--warn); font-weight: 600; }
   .sla-box {
     margin: 12px 0;
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 13px;
+    line-height: 1.5;
   }
   .sla-box.met { background: #dcfce7; color: #14532d; }
   .sla-box.not-met { background: #fee2e2; color: #7f1d1d; }
@@ -89,17 +103,27 @@
   th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .empty { color: var(--muted); font-size: 13px; font-style: italic; }
   .ongoing { color: var(--down); font-weight: 600; }
-  footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
+  footer { color: var(--muted); font-size: 11px; margin-top: 24px; line-height: 1.6; }
 </style>
 </head>
 <body>
 
 <h1>Painel de Uptime / Downtime — Sistemas MEC</h1>
 <div class="subtitle">
-  Gerado em {{ generated_at | fmt_dt }} · checagens a cada 1 minuto · critério de queda: 1 falha = indisponível
-  {% if not sla_configured %}
-  · meta de SLA ainda não configurada (config.yaml → sla.target_pct)
-  {% endif %}
+  Gerado em {{ generated_at | fmt_dt }} ({{ timezone }}) · janela de histórico: {{ lookback_days }} dias
+</div>
+
+<div class="method">
+  <strong>Como ler estes números.</strong>
+  A disponibilidade é medida por amostragem: cada checagem vale pelo intervalo até a
+  seguinte, e o uptime % é a proporção de checagens bem sucedidas na janela. Uma falha
+  isolada já conta como indisponibilidade (critério acordado, sem tolerância).
+  A <strong>cobertura</strong> mostra quantas checagens existem contra quantas eram
+  esperadas no período — um trecho sem checagem alguma não é contado como queda, então
+  <strong>uptime com cobertura baixa não sustenta glosa</strong>. A cadência informada em
+  cada sistema é a <strong>medida nos dados</strong>, não a configurada. O horário de "fim"
+  de um incidente é quando a recuperação foi detectada; a amostragem não permite precisar
+  o instante exato do retorno.
 </div>
 
 {% for item in targets_data %}
@@ -112,28 +136,32 @@
       <div class="target-url">{{ t.url }}</div>
     </div>
     {% if status is none %}
-      <span class="badge down">SEM DADOS</span>
+      <span class="badge unknown">SEM DADOS</span>
     {% elif status.up %}
       <span class="badge up">ONLINE</span>
     {% else %}
-      <span class="badge down">OFFLINE desde {{ status.down_since | fmt_dt }}</span>
+      <span class="badge down">OFFLINE desde {{ item.status_down_since_local | fmt_dt }}</span>
     {% endif %}
   </div>
 
   {% if status is not none %}
   <div class="target-url">
-    Última checagem: {{ status.last_checked_at | fmt_dt }}
+    Última checagem: {{ item.status_last_checked_local | fmt_dt }}
     {% if status.last_status_code %} · HTTP {{ status.last_status_code }}{% endif %}
     {% if status.last_error %} · {{ status.last_error }}{% endif %}
+    · cadência medida: {{ item.interval_label }}
   </div>
   {% endif %}
 
   <div class="uptime-grid">
-    {% for label, summary in item.uptime_by_window %}
+    {% for s in item.summaries %}
     <div class="uptime-stat">
-      <div class="label">{{ label }}</div>
-      <div class="value">{{ summary.uptime_pct | fmt_pct }}</div>
-      <div class="count">{{ summary.successful_checks }}/{{ summary.total_checks }} checagens</div>
+      <div class="label">{{ s.label }}</div>
+      <div class="value">{{ s.uptime_pct | fmt_pct }}</div>
+      <div class="count">{{ s.successful_checks }}/{{ s.total_checks }} checagens</div>
+      <div class="count{% if s.coverage_pct is not none and s.coverage_pct < 95 %} coverage-low{% endif %}">
+        cobertura {{ s.coverage_pct | fmt_pct }}
+      </div>
     </div>
     {% endfor %}
   </div>
@@ -146,36 +174,49 @@
     {% else %}
     <div class="sla-box not-met">
       SLA NÃO cumprido no mês corrente: {{ item.sla_summary.actual_pct | fmt_pct }} &lt; meta de {{ item.sla_summary.target_pct }}%
-      (déficit de {{ "%.2f"|format(item.sla_summary.deficit_pct) }} p.p.) — cálculo de glosa ainda não implementado, ver config.yaml
+      (déficit de {{ "%.2f"|format(item.sla_summary.deficit_pct) }} p.p.).
+      Cálculo de glosa ainda não implementado — depende da cláusula contratual.
+      {% if item.month_coverage_pct is not none and item.month_coverage_pct < 95 %}
+      <br><strong>Atenção:</strong> a cobertura de dados do mês é de apenas
+      {{ item.month_coverage_pct | fmt_pct }}; este número não é suficiente para embasar glosa.
+      {% endif %}
     </div>
     {% endif %}
   {% else %}
-    <div class="sla-box unset">Meta de SLA não configurada para este sistema.</div>
+    <div class="sla-box unset">Meta de SLA não configurada (config.yaml → sla.target_pct).</div>
   {% endif %}
 
+  {% if item.sparkline %}
   <div class="sparkline">
     <div class="label">Últimas {{ item.sparkline | length }} checagens (mais recente à direita)</div>
     <svg width="100%" height="24" viewBox="0 0 {{ item.sparkline | length * 7 }} 24" preserveAspectRatio="none">
-      {% for c in item.sparkline %}
+      {% for ok in item.sparkline %}
       <rect x="{{ loop.index0 * 7 }}" y="0" width="5" height="24"
-            fill="{{ '#16a34a' if c.success else '#dc2626' }}" />
+            fill="{{ '#16a34a' if ok else '#dc2626' }}" />
       {% endfor %}
     </svg>
   </div>
+  {% endif %}
 
   <table>
     <thead>
-      <tr><th>Incidente (início)</th><th>Fim</th><th>Duração</th></tr>
+      <tr>
+        <th>Incidente (início)</th>
+        <th>Recuperação detectada</th>
+        <th>Checagens com falha</th>
+        <th>Downtime contabilizado</th>
+      </tr>
     </thead>
     <tbody>
       {% for inc in item.incidents %}
       <tr>
         <td>{{ inc.start | fmt_dt }}</td>
-        <td>{% if inc.end %}{{ inc.end | fmt_dt }}{% else %}<span class="ongoing">em andamento</span>{% endif %}</td>
-        <td>{{ inc.duration_seconds | fmt_duration }}</td>
+        <td>{% if inc.recovered_at %}{{ inc.recovered_at | fmt_dt }}{% else %}<span class="ongoing">em andamento</span>{% endif %}</td>
+        <td>{{ inc.failed_checks }}</td>
+        <td>{{ inc.downtime }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="3" class="empty">Nenhum incidente registrado nos últimos 30 dias.</td></tr>
+      <tr><td colspan="4" class="empty">Nenhum incidente registrado na janela.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -183,7 +224,8 @@
 {% endfor %}
 
 <footer>
-  Painel gerado automaticamente a partir do banco de checagens locais. Dados dos últimos 30 dias.
+  Horários em {{ timezone }}. Dados dos últimos {{ lookback_days }} dias (a janela do mês
+  corrente é sempre apurada por inteiro, mesmo que ultrapasse esse período).
 </footer>
 
 </body>

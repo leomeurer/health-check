@@ -29,6 +29,40 @@ SLA por sistema.
   calculado** — isso depende da cláusula exata do contrato e será
   implementado quando ela for repassada.
 
+## Como os números são apurados
+
+Isto importa porque o painel é usado para embasar glosa:
+
+- **Uptime é medido por amostragem.** Cada checagem representa o intervalo
+  até a seguinte, e `uptime % = checagens OK / total de checagens` na
+  janela. Uma falha isolada já conta como indisponibilidade.
+- **Cobertura de dados é exibida junto com o uptime.** Um período sem
+  checagem nenhuma (daemon parado, VM reiniciada, execução do agendador
+  pulada) não entra na conta e faria o sistema parecer 100% disponível.
+  Por isso cada janela informa quantas checagens existem contra quantas
+  eram esperadas. **Uptime com cobertura baixa não sustenta glosa** — o
+  painel destaca isso explicitamente.
+- **Duração de incidente** = nº de checagens com falha × intervalo entre
+  checagens, mantendo coerência com o uptime %. O horário de "fim" é
+  quando a recuperação foi *detectada*; a amostragem não permite precisar
+  o instante exato do retorno.
+- **A cadência mostrada no painel é a medida nos dados** (mediana dos
+  intervalos reais), não a configurada — o agendador pode não ter rodado
+  na frequência esperada.
+- **A janela do mês usa o fuso do contrato** (`sla.timezone`, padrão
+  `America/Sao_Paulo`), e não UTC. Ancorar em UTC jogaria as últimas 3
+  horas de cada mês brasileiro para a apuração do mês seguinte.
+
+## Testes
+
+```bash
+PYTHONPATH=src python -m pytest tests/ -q
+```
+
+Cobrem a aritmética que sustenta a apuração: uptime, cobertura, duração e
+agrupamento de incidentes, fronteira do mês no fuso correto, cadência
+observada e validação de URL.
+
 ## Atenção: bloqueio por IP/WAF em alguns sistemas
 
 Ao testar a lista real de sistemas (`config.example.yaml`) a partir deste

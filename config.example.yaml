@@ -26,6 +26,7 @@ check:
 sla:
   target_pct: null          # ex: 99.5
   window: "monthly"         # janela de apuração: "monthly" (mês calendário) é a única suportada hoje
+  timezone: "America/Sao_Paulo"  # fuso do contrato: define onde começa/termina o mês apurado
   # Fórmula de glosa é específica de cada contrato. Quando você tiver a
   # cláusula, me avise para implementarmos o cálculo exato aqui
   # (ex: percentual sobre o valor da fatura, faixas de desconto, etc.).
@@ -36,7 +37,9 @@ sla:
 #      coletar dados, senão o histórico daquele sistema "quebra" em dois).
 # name: nome de exibição no painel.
 # url: endpoint a ser checado (GET).
-# expected_status: lista de códigos HTTP aceitos como "no ar" (padrão: 200-399).
+# expected_status: (opcional) lista dos códigos HTTP que contam como "no ar".
+#      Se omitido, aceita qualquer código de 200 a 399. Se informado, SOMENTE
+#      os códigos listados são aceitos — ex: [200, 302] não aceita 301.
 #
 # IMPORTANTE — testado a partir deste ambiente (sandbox na nuvem, saindo por
 # um IP de datacenter) em 19/09/2026:

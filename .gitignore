@@ -7,7 +7,3 @@ data/*.db-journal
 data/report.html
 config.yaml
 site/
-
-# Exceção: o workflow .github/workflows/healthcheck.yml faz `git add -f`
-# em data/healthcheck.db de propósito, para persistir o histórico da
-# demonstração temporária no GitHub Actions entre execuções.
