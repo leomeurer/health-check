@@ -67,6 +67,50 @@ sla:
 #             o ideal continua sendo pedir liberação do IP do monitor na WAF
 #             e então remover o 403 daqui.
 targets:
+  # --- Prioritários: primeiros da lista (e do painel) ---------------------
+  # Incluídos em 25/09/2026. Títulos/descrições tirados das próprias páginas,
+  # exceto onde indicado. Testados daqui no mesmo dia: os 4 primeiros
+  # respondem 200; mec_idiomas e mais_professores respondem 403.
+  - key: mec_livros
+    name: "MEC Livros (Biblioteca Digital do MEC)"
+    url: "https://meclivros.mec.gov.br/"
+
+  - key: pe_de_meia
+    name: "Programa Pé-de-Meia (Consulta do Estudante)"
+    url: "https://estudante.pedemeia.mec.gov.br/"
+
+  - key: mec_enem
+    name: "MEC Enem (App de preparação: simulados, redação e tira-dúvidas)"
+    url: "https://app.mecenem.mec.gov.br/"
+
+  # Já era monitorado; só mudou de posição. A key continua "gpe" para
+  # não quebrar o histórico.
+  - key: gpe
+    name: "MEC Gestão Presente na Escola (GPE)"
+    url: "https://gpe.gestaopresente.mec.gov.br/"
+
+  # ATENÇÃO — mec_idiomas e mais_professores ficam atrás do Cloudflare, que
+  # responde 403 com "cf-mitigated: challenge" (desafio anti-bot, página
+  # "Just a moment...") ao IP de datacenter do monitor. DIFERENTE do caso
+  # emec/simec: esse 403 é gerado pela BORDA do Cloudflare, sem chegar ao
+  # servidor do MEC — ele continua vindo mesmo com o sistema fora do ar.
+  # Ou seja, com `also_accept: [403]` o monitor NÃO detecta queda real
+  # desses dois enquanto o Cloudflare estiver respondendo.
+  # DECISÃO (25/09/2026): incluir aceitando o 403 mesmo assim. Não usar o
+  # uptime deles para embasar glosa até o IP do monitor ser liberado no
+  # Cloudflare (aí remover o 403 daqui).
+  # O nome/descrição não pôde ser lido da página (bloqueada pelo desafio).
+  - key: mec_idiomas
+    name: "MEC Idiomas"
+    url: "https://mecidiomas.mec.gov.br/slides"
+    also_accept: [403]   # desafio do Cloudflare; 403 NÃO prova que a origem está de pé
+
+  - key: mais_professores
+    name: "Programa Mais Professores"
+    url: "https://maisprofessores.mec.gov.br/"
+    also_accept: [403]   # desafio do Cloudflare; 403 NÃO prova que a origem está de pé
+
+  # --- Demais sistemas ----------------------------------------------------
   - key: acesso_unico
     name: "Portal Único de Acesso ao Ensino Superior (SiSU/ProUni/FIES)"
     url: "https://acessounico.mec.gov.br/"
@@ -85,10 +129,6 @@ targets:
     name: "SIMEC (Monitoramento, Execução e Controle)"
     url: "https://simec.mec.gov.br/"
     also_accept: [403]   # WAF bloqueia o IP do monitor; 403 = serviço de pé
-
-  - key: gpe
-    name: "MEC Gestão Presente na Escola (GPE)"
-    url: "https://gpe.gestaopresente.mec.gov.br/"
 
   - key: gpei
     name: "MEC Gestão Presente na Educação Infantil (GPEI)"
