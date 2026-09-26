@@ -5,9 +5,11 @@ import ipaddress
 import socket
 import time
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import requests
+from urllib3.exceptions import LocationParseError
+from urllib3.util import parse_url
 
 from .config import Target
 from .db import CLOUDFLARE_CHALLENGE, ERROR_MAX_LEN
@@ -55,14 +57,23 @@ def _redirect_problem(url: str) -> str | None:
 
     Um site monitorado (ou comprometido) não pode usar o monitor para
     alcançar endereços internos: rede privada da VM, loopback ou o serviço
-    de metadados da nuvem (169.254.169.254). Só destinos públicos passam."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return f"esquema/host inválido em {url!r}"
+    de metadados da nuvem (169.254.169.254). Só destinos públicos passam.
+
+    O host é lido pelo mesmo parser que o urllib3 usa para conectar: ele
+    decodifica %XX (`%31%32%37.0.0.1` vira 127.0.0.1), e validar outra forma
+    do nome abriria um desvio. Na dúvida — nome que não resolve ou não faz
+    sentido — o salto é recusado."""
     try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port or None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return None  # DNS falhou: a própria requisição vai registrar o erro
+        parsed = parse_url(url)
+    except LocationParseError:
+        return f"url inválida {url!r}"
+    if parsed.scheme not in ("http", "https") or not parsed.host:
+        return f"esquema/host inválido em {url!r}"
+    host = parsed.host.strip("[]")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or None, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError, ValueError):
+        return f"destino não resolvível ({host})"
     for info in infos:
         address = ipaddress.ip_address(info[4][0])
         if not address.is_global:
@@ -93,13 +104,20 @@ def check_target(target: Target, timeout_seconds: int) -> CheckResult:
                 response = _get(session, url, timeout_seconds)
                 try:
                     if response.is_redirect:
-                        next_url = urljoin(url, response.headers["location"])
+                        try:
+                            next_url = urljoin(url, response.headers["location"])
+                            problem = _redirect_problem(next_url)
+                        except (ValueError, UnicodeError):
+                            # Location malformado é defeito do site: falha, não lacuna.
+                            return CheckResult(
+                                False, response.status_code, _elapsed_ms(start),
+                                "redirecionamento_invalido",
+                            )
                         if hop == MAX_REDIRECTS:
                             return CheckResult(
                                 False, response.status_code, _elapsed_ms(start),
                                 f"redirecionamentos_demais (>{MAX_REDIRECTS})",
                             )
-                        problem = _redirect_problem(next_url)
                         if problem:
                             return CheckResult(
                                 False, response.status_code, _elapsed_ms(start),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import threading
@@ -165,6 +166,11 @@ def main() -> None:
             slept += step
 
     log.info("Encerrado.")
+    logging.shutdown()
+    # Uma checagem travada (servidor que responde a conta-gotas) deixa uma
+    # thread presa; o concurrent.futures faria join dela na saída e o
+    # `systemctl stop/restart` ficaria esperando até o TimeoutStopSec.
+    os._exit(0)
 
 
 if __name__ == "__main__":

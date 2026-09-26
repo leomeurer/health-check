@@ -521,7 +521,13 @@ def test_redirecionamento_para_endereco_interno_e_bloqueado(monkeypatch):
     """Um site não pode usar o monitor para alcançar o metadata da nuvem ou a rede interna."""
     from healthcheck import checker
 
-    for destino in ("http://169.254.169.254/opc/v2/instance/", "http://127.0.0.1:8080/", "http://10.0.0.5/"):
+    for destino in (
+        "http://169.254.169.254/opc/v2/instance/", "http://127.0.0.1:8080/", "http://10.0.0.5/",
+        # host em %XX: o urllib3 decodifica ao conectar (desvio achado na auditoria)
+        "http://%31%32%37.0.0.1:18081/s", "http://%31%36%39.254.169.254/",
+        "http://[::ffff:127.0.0.1]/", "http://2130706433/", "http://0x7f000001/",
+        "http://nao-existe.invalid/",  # não resolve: bloqueia em vez de liberar
+    ):
         pedidas = _fake_get(monkeypatch, [_FakeResponse(302, {"location": destino})])
         result = checker.check_target(_alvo(), timeout_seconds=5)
         assert result.success is False
@@ -590,3 +596,13 @@ def test_endpoint_travado_nao_segura_a_rodada():
         libera.set()
         time.sleep(0.1)
         daemon._in_flight.clear()
+
+
+def test_location_malformado_e_falha_e_nao_lacuna(monkeypatch):
+    from healthcheck import checker
+
+    for location in ("http://[invalido/", "http://a..b/", "http://127.0.0.1:99999/"):
+        _fake_get(monkeypatch, [_FakeResponse(302, {"location": location})])
+        result = checker.check_target(_alvo(), timeout_seconds=5)
+        assert result.success is False
+        assert result.error.startswith(("redirecionamento_invalido", "redirecionamento_bloqueado"))

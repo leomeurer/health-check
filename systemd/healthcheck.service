@@ -15,6 +15,8 @@ Environment=PYTHONPATH=/opt/health-check/src
 ExecStart=/opt/health-check/.venv/bin/python -m healthcheck.daemon --config /opt/health-check/config.yaml
 Restart=on-failure
 RestartSec=5
+# Sai rápido mesmo com uma checagem travada (ver daemon.py).
+TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal
 # Teto de memória: uma resposta patológica não derruba a VM inteira.
