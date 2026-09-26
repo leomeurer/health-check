@@ -389,3 +389,91 @@ def test_duracao_do_mes_no_fuso_do_contrato():
 
     assert month_length_seconds(datetime(2026, 9, 15, 12, 0), "America/Sao_Paulo") == 30 * 24 * 3600
     assert month_length_seconds(datetime(2026, 2, 10, 12, 0), "America/Sao_Paulo") == 28 * 24 * 3600
+
+
+# --- Gráfico mensal (SLA apurado por mês) -------------------------------
+
+def test_limites_dos_meses_no_fuso_do_contrato():
+    from healthcheck.sla import year_month_bounds
+
+    bounds = year_month_bounds(datetime(2026, 9, 25, 12, 0), "America/Sao_Paulo")
+    assert len(bounds) == 13
+    assert bounds[0] == datetime(2026, 1, 1, 3, 0)   # 00:00 de Brasília
+    assert bounds[8] == datetime(2026, 9, 1, 3, 0)
+    assert bounds[12] == datetime(2027, 1, 1, 3, 0)
+
+
+def test_celula_do_mes_estados():
+    from healthcheck.sla import month_cell
+
+    mes = 30 * 24 * 3600
+    cheio = mes // INTERVAL  # rodadas possíveis no mês inteiro
+    # sem rodada nenhuma -> célula vazia
+    assert month_cell(0, 0, 0, mes, mes, INTERVAL, 98.0) is None
+    # só bloqueio -> "blocked", sem uptime
+    assert month_cell(100, 0, 100, mes, mes, INTERVAL, 98.0).state == "blocked"
+    # cobertura completa, acima da meta
+    assert month_cell(cheio, 10, 0, mes, mes, INTERVAL, 98.0).state == "met"
+    # cobertura completa, abaixo da meta (3% fora, 98% permite 2%)
+    assert month_cell(cheio, int(cheio * 0.03), 0, mes, mes, INTERVAL, 98.0).state == "missed"
+    # pouca cobertura, pouca queda -> não dá para afirmar
+    cell = month_cell(1000, 1, 0, mes, mes, INTERVAL, 98.0)
+    assert cell.state == "not_assessable"
+    assert cell.uptime_pct == pytest.approx(99.9)
+    # pouca cobertura, mas a queda medida já estoura a margem do mês -> descumprido
+    assert month_cell(2000, 15 * 60, 0, mes, mes, INTERVAL, 98.0).state == "missed"
+
+
+def test_celula_do_mes_corrente_usa_so_o_trecho_decorrido():
+    """No dia 10, 10 dias de rodadas completas são 100% de cobertura."""
+    from healthcheck.sla import month_cell
+
+    dez_dias = 10 * 24 * 3600
+    cell = month_cell(dez_dias // INTERVAL, 0, 0, dez_dias, 30 * 24 * 3600, INTERVAL, 98.0)
+    assert cell.coverage_pct == pytest.approx(100.0)
+    assert cell.state == "met"
+
+
+def test_agregacao_mensal_no_banco_bate_com_a_regra_por_rodada():
+    """A consulta do gráfico agrega no banco; tem que dar o mesmo que
+    combine_endpoint_rows (a regra usada nos blocos de cada sistema)."""
+    from healthcheck.db import CLOUDFLARE_CHALLENGE, Check, init_db, make_engine, make_session_factory
+    from healthcheck.report import _monthly_round_counts
+    from healthcheck.sla import EndpointRow, combine_endpoint_rows, year_month_bounds
+
+    engine = make_engine("sqlite:///:memory:")
+    init_db(engine)
+    session_factory = make_session_factory(engine)
+    bounds = year_month_bounds(datetime(2026, 9, 25), "America/Sao_Paulo")
+
+    # 'o' OK, 'x' falha real, 'b' desafio do Cloudflare; uma rodada por minuto,
+    # começando 2 min antes da virada de agosto para setembro (horário local).
+    pagina = "oxbbooxo"
+    api = "ooxbbooo"
+    start = bounds[8] - timedelta(minutes=2)
+    por_endpoint = {}
+    with session_factory() as session:
+        for key, pattern in (("pagina", pagina), ("api", api)):
+            por_endpoint[key] = []
+            for i, c in enumerate(pattern):
+                at = start + timedelta(minutes=i)
+                session.add(
+                    Check(
+                        target_key=key, checked_at=at, success=c == "o",
+                        status_code=403 if c == "b" else (200 if c == "o" else 503),
+                        error=CLOUDFLARE_CHALLENGE if c == "b" else (None if c == "o" else "status"),
+                    )
+                )
+                por_endpoint[key].append(EndpointRow(at, c == "o", c == "b"))
+        session.commit()
+        counts = _monthly_round_counts(session, ["pagina", "api"], bounds)
+
+    rodadas = combine_endpoint_rows(por_endpoint)
+    esperado = {}
+    for r in rodadas:
+        m = 7 if r.checked_at < bounds[8] else 8
+        total, falhas, bloqueadas = esperado.get(m, (0, 0, 0))
+        esperado[m] = (total + 1, falhas + (not r.success and not r.blocked), bloqueadas + r.blocked)
+    assert counts == esperado
+    # conferência manual: agosto = rodadas "oo"+"xo" -> 2 rodadas, 1 falha
+    assert counts[7] == (2, 1, 0)

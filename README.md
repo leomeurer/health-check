@@ -25,6 +25,15 @@ SLA por sistema.
   endpoints responderam OK**. Motivo: a página inicial pode vir de
   cache/CDN enquanto o backend está fora — caso real no GPE em 23/09/2026,
   quando o navegador recebeu 503 e o monitor, só na página, via 200.
+- **Gráfico mensal no final do painel**: heatmap (Apache ECharts 5.6.0, o
+  mesmo do modelo de painel) com o SLA apurado de cada sistema por mês, pelo
+  nome curto (`short_name` no `config.yaml`). Segue as mesmas regras dos
+  blocos: bloqueio Cloudflare fora da conta e "não apurável" (`*`) com
+  cobertura abaixo de 95%. O botão "Simular ano preenchido" troca, só
+  no navegador, por valores fictícios para visualizar o ano cheio — com
+  faixa de aviso, título e tooltip marcados como SIMULAÇÃO. A biblioteca fica versionada em
+  `src/healthcheck/static/echarts.min.js` e é copiada ao lado do HTML gerado
+  — sem CDN. Se ela não carregar, só o gráfico some; o resto é HTML puro.
 - **Painel**: HTML estático gerado pelo próprio script (sem servidor
   web adicional, sem dependência de CDN externo — importante numa rede
   corporativa/governamental que pode ser restrita).

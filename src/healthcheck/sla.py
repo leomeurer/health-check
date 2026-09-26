@@ -315,6 +315,70 @@ def sla_definitely_missed(
     return failed_checks * interval_seconds > allowed_downtime
 
 
+# Abaixo disso, o percentual do mês não sustenta afirmar se a meta foi
+# cumprida (mesmo limiar usado nos blocos de cada sistema no painel).
+MIN_COVERAGE_PCT = 95.0
+
+
+def year_month_bounds(now_utc: datetime, tz_name: str) -> list[datetime]:
+    """Os 13 limites (1º de jan. ... 1º de jan. do ano seguinte) dos meses do
+    ano corrente NO FUSO DO CONTRATO, em UTC naive como no banco."""
+    tz = ZoneInfo(tz_name)
+    year = now_utc.replace(tzinfo=timezone.utc).astimezone(tz).year
+    bounds = []
+    for i in range(13):
+        local = datetime(year + i // 12, i % 12 + 1, 1, tzinfo=tz)
+        bounds.append(local.astimezone(timezone.utc).replace(tzinfo=None))
+    return bounds
+
+
+@dataclass
+class MonthCell:
+    """Uma célula do gráfico mensal: o SLA apurado de um sistema num mês."""
+
+    state: str  # "met" | "missed" | "not_assessable" | "blocked" | "measured"
+    uptime_pct: float | None
+    coverage_pct: float | None
+    measured_rounds: int
+    failed_rounds: int
+    blocked_rounds: int
+
+
+def month_cell(
+    total_rounds: int,
+    failed_rounds: int,
+    blocked_rounds: int,
+    elapsed_seconds: float,
+    month_seconds: float,
+    interval_seconds: float,
+    target_pct: float | None,
+) -> MonthCell | None:
+    """SLA de um mês a partir das contagens de rodadas. None = mês sem
+    nenhuma rodada (futuro ou antes do monitor existir): célula vazia.
+
+    `elapsed_seconds` é o trecho do mês já decorrido (o mês inteiro, se já
+    fechou): a cobertura é contra o que era possível medir até agora."""
+    if total_rounds == 0:
+        return None
+    measured = total_rounds - blocked_rounds
+    if measured == 0:
+        return MonthCell("blocked", None, 0.0, 0, 0, blocked_rounds)
+
+    uptime = (measured - failed_rounds) / measured * 100
+    expected = int(elapsed_seconds // interval_seconds) if interval_seconds > 0 else 0
+    coverage = min(100.0, measured / expected * 100) if expected > 0 else None
+
+    if target_pct is None:
+        state = "measured"
+    elif sla_definitely_missed(failed_rounds, interval_seconds, month_seconds, target_pct):
+        state = "missed"
+    elif coverage is None or coverage < MIN_COVERAGE_PCT:
+        state = "not_assessable"
+    else:
+        state = "met" if uptime >= target_pct else "missed"
+    return MonthCell(state, uptime, coverage, measured, failed_rounds, blocked_rounds)
+
+
 def to_local(dt: datetime | None, tz_name: str) -> datetime | None:
     """Converte um horário UTC naive (como gravado no banco) para o fuso de
     exibição."""

@@ -13,7 +13,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, or_, select
 
 from .config import PROJECT_ROOT, load_config, resolve_db_url
 from .db import CLOUDFLARE_CHALLENGE, Check, init_db, make_engine, make_session_factory, utcnow
@@ -25,7 +25,9 @@ from .sla import (
     compute_incidents,
     failed_keys_between,
     format_duration,
+    MIN_COVERAGE_PCT,
     measured_rows,
+    month_cell,
     month_length_seconds,
     month_window,
     observed_interval_seconds,
@@ -34,9 +36,14 @@ from .sla import (
     summarize_window,
     to_local,
     window_bounds,
+    year_month_bounds,
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+# ECharts 5.6.0 (Apache-2.0), versionado no repositório: o painel não
+# depende de CDN (rede corporativa/governamental pode bloquear).
+ECHARTS_FILE = Path(__file__).resolve().parent / "static" / "echarts.min.js"
+MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 LOOKBACK_DAYS = 30
 SPARKLINE_MAX_TICKS = 60
 INCIDENTS_SHOWN = 10
@@ -54,6 +61,97 @@ def _accepted_label(target) -> str:
         base = ", ".join(str(code) for code in sorted(target.expected_status))
     extra = sorted(target.also_accept - (target.expected_status or frozenset()))
     return base + "".join(f", {code}" for code in extra)
+
+
+def _monthly_round_counts(session, keys: list[str], bounds) -> dict[int, tuple[int, int, int]]:
+    """Por mês do ano (0-11): (rodadas, rodadas com falha real, rodadas só
+    bloqueadas) do sistema formado por `keys`. Mesma regra de
+    combine_endpoint_rows, mas agregada no banco: uma rodada falha se algum
+    endpoint falhou de verdade; é bloqueada se nenhum falhou e algum caiu no
+    desafio do Cloudflare."""
+    real_failure = case(
+        (
+            and_(
+                Check.success.is_(False),
+                or_(Check.error.is_(None), Check.error != CLOUDFLARE_CHALLENGE),
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    blocked = case((Check.error == CLOUDFLARE_CHALLENGE, 1), else_=0)
+    rounds = (
+        select(
+            Check.checked_at.label("at"),
+            func.max(real_failure).label("failed"),
+            func.max(blocked).label("blocked"),
+        )
+        .where(Check.target_key.in_(keys), Check.checked_at >= bounds[0], Check.checked_at < bounds[-1])
+        .group_by(Check.checked_at)
+        .subquery()
+    )
+    # CASE com os limites já em UTC, em vez de funções de data do banco:
+    # funciona igual no SQLite e no Oracle, e respeita o fuso do contrato.
+    month = case(
+        *[(and_(rounds.c.at >= bounds[i], rounds.c.at < bounds[i + 1]), i) for i in range(12)]
+    )
+    query = select(
+        month.label("month"),
+        func.count(),
+        func.sum(rounds.c.failed),
+        func.sum(case((and_(rounds.c.failed == 0, rounds.c.blocked == 1), 1), else_=0)),
+    ).group_by(month)
+    return {
+        int(m): (int(total), int(failed or 0), int(only_blocked or 0))
+        for m, total, failed, only_blocked in session.execute(query).all()
+    }
+
+
+def _heatmap_data(config, session, systems_data, now) -> dict:
+    """Dados do gráfico mensal do painel: um valor por sistema e mês, com a
+    mesma apuração dos blocos (bloqueio fora da conta, cobertura mínima)."""
+    tz_name = config.sla.timezone
+    bounds = year_month_bounds(now, tz_name)
+    cells = []
+    for row_index, item in enumerate(systems_data):
+        system = item["system"]
+        counts = _monthly_round_counts(session, [t.key for t in system.endpoints], bounds)
+        for month_index, (total, failed, only_blocked) in counts.items():
+            month_start, month_end = bounds[month_index], bounds[month_index + 1]
+            cell = month_cell(
+                total,
+                failed,
+                only_blocked,
+                elapsed_seconds=(min(now, month_end) - month_start).total_seconds(),
+                month_seconds=(month_end - month_start).total_seconds(),
+                interval_seconds=item["interval_seconds"],
+                target_pct=config.sla.target_pct,
+            )
+            if cell is None:
+                continue
+            cells.append(
+                {
+                    "x": month_index,
+                    "y": row_index,
+                    "state": cell.state,
+                    "uptime": cell.uptime_pct,
+                    "coverage": cell.coverage_pct,
+                    "measured": cell.measured_rounds,
+                    "failed": cell.failed_rounds,
+                    "blocked": cell.blocked_rounds,
+                }
+            )
+    local_now = to_local(now, tz_name)
+    return {
+        "year": local_now.year,
+        "months": MONTH_LABELS,
+        "systems": [item["system"].short_name for item in systems_data],
+        "system_names": [item["system"].name for item in systems_data],
+        "cells": cells,
+        "target_pct": config.sla.target_pct,
+        "min_coverage_pct": MIN_COVERAGE_PCT,
+        "current_month": local_now.month - 1,
+    }
 
 
 def build_report_data(config, session_factory, now) -> dict:
@@ -187,13 +285,18 @@ def build_report_data(config, session_factory, now) -> dict:
                         config.sla.target_pct,
                     ),
                     "interval_label": format_duration(interval),
+                    "interval_seconds": interval,
                 }
             )
+
+        heatmap = _heatmap_data(config, session, systems_data, now)
 
     return {
         "generated_at": to_local(now, tz_name),
         "timezone": tz_name,
         "systems_data": systems_data,
+        "heatmap": heatmap,
+        "min_coverage_pct": MIN_COVERAGE_PCT,
         "sla_configured": config.sla.target_pct is not None,
         "lookback_days": LOOKBACK_DAYS,
     }
@@ -211,6 +314,17 @@ def render_report(data: dict, output_path: Path) -> None:
     template = env.get_template("report.html.j2")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(template.render(**data), encoding="utf-8")
+    _publish_echarts(output_path.parent)
+
+
+def _publish_echarts(output_dir: Path) -> None:
+    """Coloca a biblioteca ao lado do HTML (o painel a referencia pelo
+    caminho relativo). Só regrava quando mudou, para o navegador poder
+    manter em cache."""
+    target = output_dir / ECHARTS_FILE.name
+    content = ECHARTS_FILE.read_bytes()
+    if not target.exists() or target.read_bytes() != content:
+        target.write_bytes(content)
 
 
 def main() -> None:

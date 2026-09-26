@@ -45,6 +45,8 @@ class System:
     key: str
     name: str
     endpoints: list[Target]
+    # Nome curto para o gráfico mensal do painel.
+    short_name: str = ""
 
 
 @dataclass
@@ -233,7 +235,12 @@ def load_config(path: str | Path | None = None) -> Config:
                 _parse_endpoint(extra, seen_keys, system_key=main.key, system_name=main.name)
             )
         targets.extend(endpoints)
-        systems.append(System(key=main.key, name=main.name, endpoints=endpoints))
+        short_name = t.get("short_name") or main.name
+        if not isinstance(short_name, str):
+            raise ConfigError(f"'short_name' do sistema '{main.key}' deve ser texto.")
+        systems.append(
+            System(key=main.key, name=main.name, endpoints=endpoints, short_name=short_name)
+        )
 
     return Config(database=database, check=check, sla=sla, targets=targets, systems=systems)
 

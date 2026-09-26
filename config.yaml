@@ -44,6 +44,7 @@ sla:
 #      os códigos listados são aceitos — ex: [200, 302] não aceita 301.
 # also_accept: (opcional) códigos extras aceitos ALÉM da regra acima. O painel
 #      marca esses alvos, para a apuração de SLA ficar auditável.
+# short_name: (opcional) nome curto do sistema no gráfico mensal (final do painel).
 # label: (opcional) rótulo do endpoint principal no painel. Padrão: "Página inicial".
 # extra_checks: (opcional) outros endpoints do MESMO sistema (ex: a API por trás
 #      da página). Cada um tem key, label, url e os mesmos expected_status /
@@ -78,6 +79,7 @@ targets:
   # 200; mec_idiomas e mais_professores caem no desafio do Cloudflare.
   - key: mec_livros
     name: "MEC Livros (Biblioteca Digital do MEC)"
+    short_name: "MEC Livros"
     url: "https://meclivros.mec.gov.br/"
     # A página inicial é Next.js com cache (x-nextjs-cache: HIT): não passa
     # pela API. /api/backend/auth/me é repassada ao backend, que responde 401
@@ -90,6 +92,7 @@ targets:
 
   - key: pe_de_meia
     name: "Programa Pé-de-Meia (Consulta do Estudante)"
+    short_name: "Pé-de-Meia"
     url: "https://estudante.pedemeia.mec.gov.br/"
     # Sem extra_checks de propósito: a página inicial é gerada na hora pela
     # própria aplicação (uvicorn, cache-control: no-store), então checá-la
@@ -97,6 +100,7 @@ targets:
 
   - key: mec_enem
     name: "MEC Enem (App de preparação: simulados, redação e tira-dúvidas)"
+    short_name: "MEC Enem"
     url: "https://app.mecenem.mec.gov.br/"
     # O app é um site estático (S3 + CloudFront): a página inicial não diz
     # nada sobre o backend. /health é o health check da API principal
@@ -110,6 +114,7 @@ targets:
   # não quebrar o histórico.
   - key: gpe
     name: "MEC Gestão Presente na Escola (GPE)"
+    short_name: "GPE"
     url: "https://gpe.gestaopresente.mec.gov.br/"
     # A página inicial é Next.js pré-gerada (s-maxage de 1 ano): continua
     # respondendo 200 mesmo com o backend fora. A API é o que o navegador
@@ -123,35 +128,43 @@ targets:
   # mec_idiomas e mais_professores: bloqueio Cloudflare (ver cabeçalho).
   - key: mec_idiomas
     name: "MEC Idiomas"   # <title> da página: "MEC idiomas"
+    short_name: "MEC Idiomas"
     url: "https://mecidiomas.mec.gov.br/slides"
 
   - key: mais_professores
     name: "Programa Mais Professores"
+    short_name: "Mais Professores"
     url: "https://maisprofessores.mec.gov.br/"
 
   # --- Demais sistemas ----------------------------------------------------
   - key: acesso_unico
     name: "Portal Único de Acesso ao Ensino Superior (SiSU/ProUni/FIES)"
+    short_name: "Acesso Único"
     url: "https://acessounico.mec.gov.br/"
 
   - key: emec
     name: "e-MEC (Regulação da Educação Superior)"
+    short_name: "e-MEC"
     url: "https://emec.mec.gov.br/"
 
   - key: sistec
     name: "Sistec (Sistema de Informações Técnicas)"
+    short_name: "Sistec"
     url: "https://sistec.mec.gov.br/"
 
   - key: simec
     name: "SIMEC (Monitoramento, Execução e Controle)"
+    short_name: "SIMEC"
     url: "https://simec.mec.gov.br/"
 
   - key: gpei
     name: "MEC Gestão Presente na Educação Infantil (GPEI)"
+    short_name: "GPEI"
     url: "https://gpei.mec.gov.br/"
 
   - key: inep_portal
     name: "Portal de Sistemas do Inep (Enem, Enade, etc.)"
+    short_name: "Portal Inep"
     # A URL informada (https://inep.gov.br) não resolve DNS (domínio
     # inexistente). O endereço real do portal do Inep dentro do gov.br é
     # este abaixo — confirme se é o sistema/página certa antes de contar
@@ -169,10 +182,12 @@ targets:
 
   - key: mec_portal
     name: "Página Oficial do Ministério da Educação (MEC/Gov.br)"
+    short_name: "Portal MEC"
     url: "https://www.gov.br/mec/pt-br"
 
   - key: avamec
     name: "Ambiente Virtual de Aprendizagem (AVAMEC)"
+    short_name: "AVAMEC"
     url: "https://avamec.mec.gov.br/"
 
   # Dependência crítica externa: quase todos os sistemas acima dependem do
@@ -181,4 +196,5 @@ targets:
   # por isso ele entra na mesma árvore de monitoramento.
   - key: acesso_govbr
     name: "Provedor de Identidade Gov.br (Autenticação Unificada) — dependência SSO"
+    short_name: "Login gov.br"
     url: "https://acesso.gov.br"
