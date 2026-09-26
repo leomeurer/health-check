@@ -40,9 +40,11 @@ from .sla import (
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-# ECharts 5.6.0 (Apache-2.0), versionado no repositório: o painel não
-# depende de CDN (rede corporativa/governamental pode bloquear).
-ECHARTS_FILE = Path(__file__).resolve().parent / "static" / "echarts.min.js"
+# Arquivos publicados ao lado do HTML: ECharts 5.6.0 (Apache-2.0), versionado
+# no repositório para o painel não depender de CDN, e o script do gráfico
+# (separado do HTML para permitir uma CSP sem script inline).
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_FILES = ("echarts.min.js", "heatmap.js")
 MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 LOOKBACK_DAYS = 30
 SPARKLINE_MAX_TICKS = 60
@@ -314,17 +316,18 @@ def render_report(data: dict, output_path: Path) -> None:
     template = env.get_template("report.html.j2")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(template.render(**data), encoding="utf-8")
-    _publish_echarts(output_path.parent)
+    _publish_static(output_path.parent)
 
 
-def _publish_echarts(output_dir: Path) -> None:
-    """Coloca a biblioteca ao lado do HTML (o painel a referencia pelo
-    caminho relativo). Só regrava quando mudou, para o navegador poder
+def _publish_static(output_dir: Path) -> None:
+    """Coloca os scripts ao lado do HTML (o painel os referencia pelo
+    caminho relativo). Só regrava o que mudou, para o navegador poder
     manter em cache."""
-    target = output_dir / ECHARTS_FILE.name
-    content = ECHARTS_FILE.read_bytes()
-    if not target.exists() or target.read_bytes() != content:
-        target.write_bytes(content)
+    for name in STATIC_FILES:
+        target = output_dir / name
+        content = (STATIC_DIR / name).read_bytes()
+        if not target.exists() or target.read_bytes() != content:
+            target.write_bytes(content)
 
 
 def main() -> None:

@@ -2,6 +2,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-data/*.db
-data/*.db-journal
-data/report.html
+# Banco (incluindo -wal/-shm do SQLite) e painel gerado: nunca versionar.
+data/

@@ -4,6 +4,7 @@ Rodar com:  PYTHONPATH=src python -m pytest tests/ -q
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -342,18 +343,38 @@ class _FakeResponse:
     def __init__(self, status_code, headers):
         self.status_code = status_code
         self.headers = headers
+        self.closed = False
+
+    @property
+    def is_redirect(self):
+        return "location" in self.headers and self.status_code in (301, 302, 303, 307, 308)
+
+    def close(self):
+        self.closed = True
+
+
+def _fake_get(monkeypatch, responses):
+    """Faz o checker receber `responses` em sequência (uma por salto) e
+    devolve a lista de URLs pedidas."""
+    from healthcheck import checker
+
+    pedidas = []
+    fila = list(responses)
+
+    def get(session, url, timeout_seconds):
+        pedidas.append(url)
+        return fila.pop(0)
+
+    monkeypatch.setattr(checker, "_get", get)
+    return pedidas
 
 
 def test_checker_reconhece_desafio_do_cloudflare(monkeypatch):
-    import requests
-
     from healthcheck import checker
     from healthcheck.config import Target
     from healthcheck.db import CLOUDFLARE_CHALLENGE
 
-    monkeypatch.setattr(
-        requests, "get", lambda *a, **k: _FakeResponse(403, {"cf-mitigated": "challenge", "server": "cloudflare"})
-    )
+    _fake_get(monkeypatch, [_FakeResponse(403, {"cf-mitigated": "challenge", "server": "cloudflare"})])
     # Mesmo que o 403 fosse aceito no config, o desafio não vira "no ar".
     alvo = Target(key="x", name="X", url="https://x.gov.br/", also_accept=frozenset({403}))
     result = checker.check_target(alvo, timeout_seconds=5)
@@ -362,12 +383,10 @@ def test_checker_reconhece_desafio_do_cloudflare(monkeypatch):
 
 
 def test_checker_403_comum_continua_sendo_falha(monkeypatch):
-    import requests
-
     from healthcheck import checker
     from healthcheck.config import Target
 
-    monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeResponse(403, {"server": "nginx"}))
+    _fake_get(monkeypatch, [_FakeResponse(403, {"server": "nginx"})])
     result = checker.check_target(Target(key="x", name="X", url="https://x.gov.br/"), timeout_seconds=5)
     assert result.success is False
     assert result.error.startswith("status_code_fora_do_esperado")
@@ -477,3 +496,97 @@ def test_agregacao_mensal_no_banco_bate_com_a_regra_por_rodada():
     assert counts == esperado
     # conferência manual: agosto = rodadas "oo"+"xo" -> 2 rodadas, 1 falha
     assert counts[7] == (2, 1, 0)
+
+
+# --- Endurecimento do checker e do daemon --------------------------------
+
+def _alvo():
+    from healthcheck.config import Target
+
+    return Target(key="x", name="X", url="https://8.8.8.8/inicio")
+
+
+def test_redirecionamento_publico_e_seguido(monkeypatch):
+    from healthcheck import checker
+
+    respostas = [_FakeResponse(301, {"location": "/pt-br"}), _FakeResponse(200, {})]
+    pedidas = _fake_get(monkeypatch, respostas)
+    result = checker.check_target(_alvo(), timeout_seconds=5)
+    assert result.success is True
+    assert pedidas == ["https://8.8.8.8/inicio", "https://8.8.8.8/pt-br"]
+    assert all(r.closed for r in respostas)  # corpo nunca é baixado; conexão devolvida
+
+
+def test_redirecionamento_para_endereco_interno_e_bloqueado(monkeypatch):
+    """Um site não pode usar o monitor para alcançar o metadata da nuvem ou a rede interna."""
+    from healthcheck import checker
+
+    for destino in ("http://169.254.169.254/opc/v2/instance/", "http://127.0.0.1:8080/", "http://10.0.0.5/"):
+        pedidas = _fake_get(monkeypatch, [_FakeResponse(302, {"location": destino})])
+        result = checker.check_target(_alvo(), timeout_seconds=5)
+        assert result.success is False
+        assert result.error.startswith("redirecionamento_bloqueado")
+        assert pedidas == ["https://8.8.8.8/inicio"]  # o destino interno nunca é pedido
+
+
+def test_redirecionamentos_demais_sao_falha(monkeypatch):
+    from healthcheck import checker
+
+    loop = [_FakeResponse(302, {"location": f"/p{i}"}) for i in range(checker.MAX_REDIRECTS + 1)]
+    _fake_get(monkeypatch, loop)
+    result = checker.check_target(_alvo(), timeout_seconds=5)
+    assert result.success is False
+    assert result.error.startswith("redirecionamentos_demais")
+
+
+def _config_dois_alvos():
+    from healthcheck.config import CheckSettings, Config, Target
+
+    alvos = [Target(key="rapido", name="R", url="https://8.8.8.8/"), Target(key="lento", name="L", url="https://8.8.4.4/")]
+    return Config(check=CheckSettings(interval_seconds=60, timeout_seconds=1), targets=alvos)
+
+
+def _session_factory():
+    from healthcheck.db import init_db, make_engine, make_session_factory
+
+    engine = make_engine("sqlite:///:memory:")
+    init_db(engine)
+    return make_session_factory(engine)
+
+
+def test_endpoint_travado_nao_segura_a_rodada():
+    """Um servidor que responde a conta-gotas nunca estoura o timeout por
+    leitura do requests; a rodada tem de ser gravada mesmo assim."""
+    import threading
+
+    from healthcheck import daemon
+    from healthcheck.checker import CheckResult
+    from healthcheck.db import Check
+
+    libera = threading.Event()
+
+    def check(target, timeout_seconds):
+        if target.key == "lento":
+            libera.wait(10)
+        return CheckResult(True, 200, 1.0, None)
+
+    factory = _session_factory()
+    config = _config_dois_alvos()
+    inicio = time.monotonic()
+    try:
+        daemon.run_round(config, factory, check=check, grace_seconds=0.2)
+        assert time.monotonic() - inicio < 3
+        with factory() as session:
+            linhas = {c.target_key: c for c in session.query(Check).all()}
+        assert linhas["rapido"].success is True
+        assert linhas["lento"].success is False and linhas["lento"].error == "timeout (rodada)"
+
+        # Na rodada seguinte a checagem antiga ainda está presa: não abre outra.
+        daemon.run_round(config, factory, check=check, grace_seconds=0.2)
+        with factory() as session:
+            erros = [c.error for c in session.query(Check).filter_by(target_key="lento")]
+        assert erros[-1] == "timeout (checagem anterior travada)"
+    finally:
+        libera.set()
+        time.sleep(0.1)
+        daemon._in_flight.clear()

@@ -12,10 +12,11 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 
-from .checker import check_target
+from .checker import CheckResult, check_target
 from .config import Config, load_config, resolve_db_url
 from .db import CLOUDFLARE_CHALLENGE, Check, init_db, make_engine, make_session_factory, utcnow
 
@@ -27,6 +28,17 @@ log = logging.getLogger("healthcheck.daemon")
 
 _shutdown_requested = False
 
+# Folga, além do timeout HTTP, para a rodada inteira terminar. O timeout do
+# requests vale por operação de rede (conectar, cada leitura), não para a
+# requisição toda: um servidor que responde a conta-gotas não estoura nunca.
+ROUND_GRACE_SECONDS = 5
+
+# Endpoints cuja checagem de uma rodada anterior ainda não terminou. Não
+# abrimos outra em cima: senão um servidor travado acumularia uma thread e
+# uma conexão presas por minuto.
+_in_flight: set[str] = set()
+_in_flight_lock = threading.Lock()
+
 
 def _handle_shutdown_signal(signum, _frame):
     global _shutdown_requested
@@ -34,20 +46,49 @@ def _handle_shutdown_signal(signum, _frame):
     _shutdown_requested = True
 
 
-def run_round(config: Config, session_factory) -> None:
-    results = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(config.targets))) as pool:
-        future_to_target = {
-            pool.submit(check_target, target, config.check.timeout_seconds): target
-            for target in config.targets
-        }
-        for future in as_completed(future_to_target):
-            target = future_to_target[future]
-            try:
-                results[target.key] = future.result()
-            except Exception:  # falha inesperada no próprio checker
-                log.exception("Erro inesperado checando %s", target.key)
-                results[target.key] = None
+def _checked(check, target, timeout_seconds):
+    try:
+        return check(target, timeout_seconds)
+    finally:
+        with _in_flight_lock:
+            _in_flight.discard(target.key)
+
+
+def run_round(
+    config: Config,
+    session_factory,
+    check=check_target,
+    grace_seconds: float = ROUND_GRACE_SECONDS,
+) -> None:
+    timeout = config.check.timeout_seconds
+    results: dict[str, CheckResult | None] = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, len(config.targets)))
+    future_to_target = {}
+    for target in config.targets:
+        with _in_flight_lock:
+            busy = target.key in _in_flight
+            if not busy:
+                _in_flight.add(target.key)
+        if busy:
+            log.warning("%s: checagem anterior ainda em andamento; conta como timeout", target.key)
+            results[target.key] = CheckResult(False, None, None, "timeout (checagem anterior travada)")
+            continue
+        future_to_target[pool.submit(_checked, check, target, timeout)] = target
+
+    done, pending = wait(future_to_target, timeout=timeout + grace_seconds)
+    # Não espera as travadas: a rodada é gravada com o que terminou no prazo.
+    pool.shutdown(wait=False, cancel_futures=True)
+    for future in done:
+        target = future_to_target[future]
+        try:
+            results[target.key] = future.result()
+        except Exception:  # falha inesperada no próprio checker
+            log.exception("Erro inesperado checando %s", target.key)
+            results[target.key] = None
+    for future in pending:
+        target = future_to_target[future]
+        log.warning("%s: não terminou em %ss; conta como timeout", target.key, timeout + grace_seconds)
+        results[target.key] = CheckResult(False, None, None, "timeout (rodada)")
 
     now = utcnow()
     with session_factory() as session:

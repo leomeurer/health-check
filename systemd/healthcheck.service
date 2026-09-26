@@ -5,19 +5,56 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Ajuste o usuário/grupo e os caminhos conforme o servidor de destino.
 User=healthcheck
 Group=healthcheck
 WorkingDirectory=/opt/health-check
 Environment=PYTHONPATH=/opt/health-check/src
-# Se o banco final for Oracle, defina a connection string aqui em vez
-# de editar config.yaml (evita credenciais no arquivo versionado):
+# Se o banco for Oracle, defina a connection string aqui (ou num drop-in com
+# permissão 600) em vez de editar config.yaml:
 # Environment=HEALTHCHECK_DB_URL=oracle+oracledb://usuario:senha@host:1521/?service_name=ORCLPDB1
 ExecStart=/opt/health-check/.venv/bin/python -m healthcheck.daemon --config /opt/health-check/config.yaml
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+# Teto de memória: uma resposta patológica não derruba a VM inteira.
+MemoryMax=300M
+
+# --- Isolamento -----------------------------------------------------------
+# O processo só enxerga o sistema de arquivos como somente leitura, exceto os
+# diretórios em ReadWritePaths; não ganha privilégios, não vê /home nem
+# dispositivos e só abre sockets de rede comuns. Se um alvo monitorado um dia
+# explorar uma falha do cliente HTTP, o estrago fica contido aqui.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=yes
+# Arquivos novos (banco, painel) sem leitura para "outros".
+UMask=0027
+# O código pertence ao root e é só leitura: não gerar .pyc ao lado dele.
+Environment=PYTHONDONTWRITEBYTECODE=1
+ReadWritePaths=/opt/health-check/data
 
 [Install]
 WantedBy=multi-user.target

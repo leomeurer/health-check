@@ -98,7 +98,7 @@ variável de ambiente `HEALTHCHECK_DB_URL` (ex:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # dependências + pytest
 
 # uma única rodada de checagem (bom para validar a configuração)
 PYTHONPATH=src python -m healthcheck.daemon --once
@@ -130,29 +130,40 @@ src/healthcheck/
   checker.py                 # checagem HTTP de um endpoint
   daemon.py                  # loop que popula o banco
   sla.py                     # uptime, cobertura, incidentes, SLA mensal
-  report.py                  # gera o painel (data/report.html)
+  report.py                  # gera o painel (report.html + scripts ao lado)
   reclassify_cloudflare.py   # manutenção: reclassifica histórico com o desafio do Cloudflare
   templates/report.html.j2
   static/echarts.min.js      # Apache ECharts 5.6.0, copiado ao lado do painel
+  static/heatmap.js          # script do gráfico mensal (sem JS inline no HTML)
 systemd/
   healthcheck.service        # daemon de checagem
   healthcheck-report.service # gera o painel (oneshot)
   healthcheck-report.timer   # dispara a geração a cada 5 min
-nginx/healthcheck.conf       # publica somente o painel e a biblioteca
-data/                        # banco SQLite e painel gerado (fora do git)
+nginx/healthcheck.conf       # publica somente o painel e seus scripts
+requirements-dev.txt         # dependências de teste (pytest)
+data/                        # banco SQLite (fora do git)
 ```
 
 ## Implantação (Linux com systemd + nginx)
 
+O código fica em `/opt/health-check`, **pertencente ao root** (o serviço só
+lê); o usuário do serviço escreve apenas no banco (`data/`) e no painel
+publicado (`/var/www/healthcheck`, de onde o nginx serve — ele nunca enxerga
+o banco).
+
 ```bash
 sudo apt update && sudo apt install -y python3-venv git nginx
-git clone https://github.com/leomeurer/health-check.git
-sudo useradd --system --home /opt/health-check --shell /usr/sbin/nologin healthcheck
-sudo mv health-check /opt/health-check
+sudo git clone https://github.com/leomeurer/health-check.git /opt/health-check
 cd /opt/health-check
 sudo python3 -m venv .venv
+sudo ./.venv/bin/pip install --upgrade pip
 sudo ./.venv/bin/pip install -r requirements.txt
-sudo chown -R healthcheck:healthcheck /opt/health-check
+
+# usuário do serviço e diretórios graváveis
+sudo useradd --system --home /opt/health-check --shell /usr/sbin/nologin healthcheck
+sudo install -d -o healthcheck -g healthcheck -m 750 /opt/health-check/data
+# setgid: os arquivos do painel herdam o grupo www-data (legíveis só pelo nginx)
+sudo install -d -o healthcheck -g www-data -m 2750 /var/www/healthcheck
 
 # checagem contínua + geração do painel a cada 5 minutos
 sudo cp systemd/*.service systemd/*.timer /etc/systemd/system/
@@ -168,9 +179,14 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-O painel fica disponível em `http://<servidor>/`. A pasta `/opt/health-check`
-pertence ao usuário do serviço; para atualizar o código, use
-`sudo -u healthcheck git pull` e reinicie `healthcheck.service`.
+O painel fica disponível em `http://<servidor>/`. Para atualizar:
+
+```bash
+sudo git -C /opt/health-check pull --ff-only
+sudo cp /opt/health-check/systemd/*.service /opt/health-check/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart healthcheck.service
+sudo systemctl start healthcheck-report.service
+```
 
 ### Em uma VM Always Free da Oracle Cloud
 
@@ -189,9 +205,19 @@ lugares:
 
 ### Segurança
 
-- O `nginx/healthcheck.conf` usa uma **lista branca**: serve apenas
-  `report.html` e `echarts.min.js`. O banco SQLite (incluindo os arquivos
-  `-wal`/`-shm`) nunca é exposto.
+- **Checagens**: o corpo das respostas nunca é baixado (só status e
+  cabeçalhos); redirecionamentos são seguidos no máximo 5 vezes e nunca para
+  endereços não públicos (rede privada, loopback, metadata da nuvem); cada
+  rodada tem prazo total, e um endpoint travado não segura os demais.
+- **Serviços isolados** pelo systemd (`ProtectSystem=strict`,
+  `NoNewPrivileges`, filtro de syscalls, sem capabilities, `MemoryMax`), com
+  escrita só em `data/` e no diretório do painel.
+- **nginx**: lista branca (`/`, `report.html`, `heatmap.js`,
+  `echarts.min.js`), apenas `GET`/`HEAD`, sem versão no cabeçalho `Server` e
+  com cabeçalhos de segurança, incluindo uma Content-Security-Policy sem
+  script inline.
+- **Permissões**: banco com modo `640` do usuário do serviço; painel
+  legível apenas pelo grupo do nginx.
 - A configuração publica o painel em HTTP, sem autenticação. Para dados que
   não devam ser públicos, adicione HTTPS (exige um domínio) e/ou autenticação
   no nginx.

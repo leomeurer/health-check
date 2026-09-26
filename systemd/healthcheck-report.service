@@ -9,4 +9,45 @@ Group=healthcheck
 WorkingDirectory=/opt/health-check
 Environment=PYTHONPATH=/opt/health-check/src
 # Environment=HEALTHCHECK_DB_URL=oracle+oracledb://usuario:senha@host:1521/?service_name=ORCLPDB1
-ExecStart=/opt/health-check/.venv/bin/python -m healthcheck.report --config /opt/health-check/config.yaml --output /opt/health-check/data/report.html
+# O painel sai do diretório de dados: o nginx publica /var/www/healthcheck e
+# nunca enxerga o banco. O diretório tem setgid do grupo www-data, então os
+# arquivos gerados (modo 640) ficam legíveis só pelo nginx.
+ExecStart=/opt/health-check/.venv/bin/python -m healthcheck.report --config /opt/health-check/config.yaml --output /var/www/healthcheck/report.html
+MemoryMax=300M
+
+# --- Isolamento -----------------------------------------------------------
+# O processo só enxerga o sistema de arquivos como somente leitura, exceto os
+# diretórios em ReadWritePaths; não ganha privilégios, não vê /home nem
+# dispositivos e só abre sockets de rede comuns. Se um alvo monitorado um dia
+# explorar uma falha do cliente HTTP, o estrago fica contido aqui.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=yes
+# Arquivos novos (banco, painel) sem leitura para "outros".
+UMask=0027
+# O código pertence ao root e é só leitura: não gerar .pyc ao lado dele.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# O banco em modo WAL exige escrita no -shm mesmo para leitura.
+ReadWritePaths=/opt/health-check/data /var/www/healthcheck
