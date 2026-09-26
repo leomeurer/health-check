@@ -1,16 +1,15 @@
 """Reclassifica o histórico de checagens que caíram no desafio do Cloudflare.
 
-Até 25/09/2026 o checker não reconhecia o desafio anti-bot do Cloudflare:
-os alvos abaixo tinham `also_accept: [403]`, e cada 403 do desafio foi
-gravado como "no ar" (success=True) sem medir nada. Este script regrava
-essas linhas como rodada sem medição (error = CLOUDFLARE_CHALLENGE), o
-mesmo que o checker grava hoje.
+Útil quando endpoints atrás do desafio anti-bot do Cloudflare foram
+monitorados com `also_accept: [403]` antes de o checker reconhecer o
+desafio: cada 403 do desafio foi gravado como "no ar" (success=True) sem
+medir nada. Este script regrava essas linhas como rodada sem medição
+(error = CLOUDFLARE_CHALLENGE), o mesmo que o checker grava hoje.
 
-Premissa: para estes alvos, TODO 403 registrado era o desafio. Não há como
-confirmar linha a linha (o cabeçalho `cf-mitigated` não era gravado), mas é
-o que todos respondiam ao reavaliar, e nenhum deles responde 403 fora do
-desafio. Linhas com outros códigos (ex: o 200 real de simec/gpei em 24/09)
-não são tocadas.
+Premissa: para os alvos informados, TODO 403 registrado era o desafio. Não
+há como confirmar linha a linha (o cabeçalho `cf-mitigated` não era
+gravado), então só use em alvos que respondem 403 apenas no desafio. Linhas
+com outros códigos (ex: um 200 real) não são tocadas.
 
 Uso:
     python -m healthcheck.reclassify_cloudflare            # só mostra o que mudaria

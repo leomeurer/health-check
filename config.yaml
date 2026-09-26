@@ -1,82 +1,59 @@
-# Configuração do monitoramento. Este arquivo é versionado de propósito:
-# ele define O QUE é medido e COM QUAL META, que é justamente o que precisa
-# ficar rastreável para sustentar a apuração contratual.
+# Configuração do monitoramento: o que é medido e com qual meta.
 #
-# Credenciais NUNCA entram aqui: a connection string do Oracle é passada
-# pela variável de ambiente HEALTHCHECK_DB_URL (ver systemd/healthcheck.service).
+# Credenciais nunca entram aqui: em produção, a connection string do banco
+# vem da variável de ambiente HEALTHCHECK_DB_URL (ver
+# systemd/healthcheck.service), que tem precedência sobre `database.url`.
 
 # --- Banco de dados -------------------------------------------------------
-# Para os testes iniciais, deixe como está (SQLite em arquivo local).
-# Para produção, troque pela connection string do Oracle, por exemplo:
+# SQLite em arquivo local por padrão. Para outro banco suportado pelo
+# SQLAlchemy, use a connection string correspondente, por exemplo:
 #   oracle+oracledb://usuario:senha@host:1521/?service_name=ORCLPDB1
-# (requer `pip install oracledb`). O restante do código não muda,
-# pois usa SQLAlchemy como camada de abstração.
+# (requer `pip install oracledb`).
 database:
   url: "sqlite:///data/healthcheck.db"
 
 # --- Checagem ---------------------------------------------------------
 check:
   interval_seconds: 60      # intervalo entre rodadas de checagem
-  timeout_seconds: 10       # timeout HTTP por sistema
-  # Critério de queda: 1 falha já conta como início de indisponibilidade
-  # (decisão registrada para fins de apuração de SLA/glosa).
+  timeout_seconds: 10       # timeout HTTP por endpoint (menor que o intervalo)
+  # Uma única falha já conta como indisponibilidade (sem tolerância de
+  # N falhas consecutivas).
 
-# --- SLA / Glosa contratual --------------------------------------------
-# O painel compara o uptime do mês corrente contra esta meta e marca cada
-# sistema como cumprido / não cumprido. O VALOR da glosa não é calculado:
-# depende da cláusula contratual, que ainda não foi repassada.
+# --- SLA ----------------------------------------------------------------
+# O painel compara o uptime de cada mês com esta meta. O valor financeiro
+# de eventual glosa não é calculado: depende da cláusula de cada contrato.
 sla:
   target_pct: 98.0          # meta de disponibilidade mensal, em %
-  window: "monthly"         # janela de apuração: "monthly" (mês calendário) é a única suportada hoje
+  window: "monthly"         # janela de apuração: "monthly" (mês calendário) é a única suportada
   timezone: "America/Sao_Paulo"  # fuso do contrato: define onde começa/termina o mês apurado
-  # Fórmula de glosa é específica de cada contrato. Quando você tiver a
-  # cláusula, me avise para implementarmos o cálculo exato aqui
-  # (ex: percentual sobre o valor da fatura, faixas de desconto, etc.).
-  glosa_formula: null
+  glosa_formula: null       # reservado; não utilizado
 
 # --- Sistemas monitorados ----------------------------------------------
 # key: identificador curto e estável (não mude depois de começar a
-#      coletar dados, senão o histórico daquele sistema "quebra" em dois).
+#      coletar dados, senão o histórico daquele sistema se divide em dois).
 # name: nome de exibição no painel.
+# short_name: (opcional) nome curto do sistema no gráfico mensal.
 # url: endpoint a ser checado (GET).
 # expected_status: (opcional) lista dos códigos HTTP que contam como "no ar".
 #      Se omitido, aceita qualquer código de 200 a 399. Se informado, SOMENTE
 #      os códigos listados são aceitos — ex: [200, 302] não aceita 301.
 # also_accept: (opcional) códigos extras aceitos ALÉM da regra acima. O painel
-#      marca esses alvos, para a apuração de SLA ficar auditável.
-# short_name: (opcional) nome curto do sistema no gráfico mensal (final do painel).
+#      sinaliza esses endpoints, para a apuração ficar auditável.
 # label: (opcional) rótulo do endpoint principal no painel. Padrão: "Página inicial".
 # extra_checks: (opcional) outros endpoints do MESMO sistema (ex: a API por trás
 #      da página). Cada um tem key, label, url e os mesmos expected_status /
-#      also_accept. O painel mostra todos no bloco do sistema, e o sistema só
-#      conta como "no ar" numa rodada se TODOS responderam OK. Motivo: a página
-#      inicial pode vir pronta de um cache/CDN enquanto a API está fora, e é
-#      essa queda que o usuário sente (caso real: GPE, 23/09/2026).
+#      also_accept. O sistema só conta como "no ar" numa rodada se TODOS
+#      responderam OK — a página inicial pode vir de um cache/CDN enquanto a
+#      API está fora.
 #
-# BLOQUEIO CLOUDFLARE (reavaliado em 25/09/2026) — emec, sistec, simec, gpei,
-# mec_idiomas e mais_professores ficam atrás do desafio anti-bot do
-# Cloudflare: ele responde 403 com "cf-mitigated: challenge" ("Just a
-# moment...") a QUALQUER cliente que não seja navegador — testado da VM da
-# Oracle e da rede da UFSC/RNP, então não é bloqueio só de IP de nuvem.
-# Essa resposta vem da borda do Cloudflare, sem a requisição chegar ao
-# sistema: não prova que ele está no ar nem fora.
-#
-# (Em 19/09 os 4 primeiros foram tratados como "403 do próprio servidor"
-# com `also_accept: [403]`; o diagnóstico estava errado e isso fazia o
-# painel mostrar "no ar" sem medição nenhuma.)
-#
-# DECISÃO (25/09/2026): o checker reconhece o desafio pelo cabeçalho e
-# grava a rodada como "bloqueio_cloudflare" — nem no ar, nem fora; fica
-# fora do uptime e derruba a cobertura. Nada é configurado por alvo:
-# quando o MEC liberar o monitor no Cloudflare (regra "Skip" para o IP
-# 157.151.7.222 ou um cabeçalho secreto), as respostas reais passam a
-# contar sozinhas. O histórico com 403 desses alvos foi reclassificado
-# como bloqueio (python -m healthcheck.reclassify_cloudflare).
+# Cloudflare: e-MEC, Sistec, SIMEC, GPEI, MEC Idiomas e Mais Professores
+# ficam atrás do desafio anti-bot do Cloudflare (403 com
+# "cf-mitigated: challenge"), respondido na borda sem a requisição chegar ao
+# sistema. O monitor registra essas rodadas como "bloqueio_cloudflare" (sem
+# medição) — não é preciso configurar nada por endpoint. Quando o monitor for
+# liberado no Cloudflare, as respostas reais passam a contar automaticamente.
 targets:
   # --- Prioritários: primeiros da lista (e do painel) ---------------------
-  # Incluídos em 25/09/2026. Títulos/descrições tirados das próprias páginas,
-  # exceto onde indicado. Testados no mesmo dia: os 4 primeiros respondem
-  # 200; mec_idiomas e mais_professores caem no desafio do Cloudflare.
   - key: mec_livros
     name: "MEC Livros (Biblioteca Digital do MEC)"
     short_name: "MEC Livros"
@@ -110,8 +87,6 @@ targets:
         label: "API principal (health check)"
         url: "https://api-core.mecenem.mec.gov.br/health"
 
-  # Já era monitorado; só mudou de posição. A key continua "gpe" para
-  # não quebrar o histórico.
   - key: gpe
     name: "MEC Gestão Presente na Escola (GPE)"
     short_name: "GPE"
@@ -125,9 +100,9 @@ targets:
         url: "https://api.gpe.gestaopresente.mec.gov.br/backend/api/"
         expected_status: [200, 401]
 
-  # mec_idiomas e mais_professores: bloqueio Cloudflare (ver cabeçalho).
+  # mec_idiomas e mais_professores: atrás do desafio do Cloudflare (ver acima).
   - key: mec_idiomas
-    name: "MEC Idiomas"   # <title> da página: "MEC idiomas"
+    name: "MEC Idiomas"
     short_name: "MEC Idiomas"
     url: "https://mecidiomas.mec.gov.br/slides"
 
@@ -165,20 +140,8 @@ targets:
   - key: inep_portal
     name: "Portal de Sistemas do Inep (Enem, Enade, etc.)"
     short_name: "Portal Inep"
-    # A URL informada (https://inep.gov.br) não resolve DNS (domínio
-    # inexistente). O endereço real do portal do Inep dentro do gov.br é
-    # este abaixo — confirme se é o sistema/página certa antes de contar
-    # com ela para o SLA.
+    # Portal institucional do Inep no gov.br.
     url: "https://www.gov.br/inep/pt-br"
-
-  # Educacenso (Censo Escolar) foi informado com a mesma URL genérica do
-  # Inep acima. Se o Educacenso tiver uma URL própria (ex: um subdomínio
-  # de login/sistema), me passe o endereço específico para eu adicionar
-  # como um alvo separado — hoje o item "inep_portal" já cobre o portal
-  # institucional, mas não substitui o monitoramento do sistema em si.
-  # - key: educacenso
-  #   name: "Educacenso (Sistema do Censo Escolar)"
-  #   url: "https://TROCAR-PELA-URL-ESPECIFICA-DO-SISTEMA"
 
   - key: mec_portal
     name: "Página Oficial do Ministério da Educação (MEC/Gov.br)"
@@ -190,10 +153,8 @@ targets:
     short_name: "AVAMEC"
     url: "https://avamec.mec.gov.br/"
 
-  # Dependência crítica externa: quase todos os sistemas acima dependem do
-  # login unificado do gov.br. Se ele cair, os portais do MEC ficam
-  # inacessíveis para novos logins mesmo estando "no ar" tecnicamente —
-  # por isso ele entra na mesma árvore de monitoramento.
+  # Dependência externa: boa parte dos sistemas acima usa o login unificado
+  # do gov.br. Se ele cair, novos logins falham mesmo com os sistemas no ar.
   - key: acesso_govbr
     name: "Provedor de Identidade Gov.br (Autenticação Unificada) — dependência SSO"
     short_name: "Login gov.br"

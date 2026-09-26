@@ -1,9 +1,8 @@
 """Cálculo de uptime, incidentes e status atual a partir dos registros
 de checagem.
 
-Critério de indisponibilidade adotado (decisão registrada com o
-solicitante): UMA falha já conta como início de downtime — não há
-tolerância de N falhas consecutivas.
+Critério de indisponibilidade: UMA falha já conta como início de
+downtime — não há tolerância de N falhas consecutivas.
 
 Convenções importantes para a apuração contratual:
 
