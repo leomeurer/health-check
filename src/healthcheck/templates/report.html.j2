@@ -64,6 +64,7 @@
   .badge.up { background: #dcfce7; color: var(--ok); }
   .badge.down { background: #fee2e2; color: var(--down); }
   .badge.unknown { background: #f1f5f9; color: var(--muted); }
+  .badge.blocked { background: #e5e7eb; color: #374151; }
   .badge::before {
     content: "";
     width: 8px;
@@ -113,6 +114,27 @@
     font-size: 12px;
     line-height: 1.5;
   }
+  .table-wrap { overflow-x: auto; }
+  .endpoints { margin: 12px 0 4px 0; }
+  .endpoints td { vertical-align: top; }
+  .endpoints .ep-label { font-weight: 600; }
+  .endpoints .ep-url { color: var(--muted); font-size: 11px; word-break: break-all; }
+  .ep-ok { color: var(--ok); font-weight: 600; }
+  .ep-down { color: var(--down); font-weight: 600; }
+  .ep-blocked { color: #374151; font-weight: 600; }
+  .note-blocked {
+    margin: 10px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .ep-detail { color: var(--muted); font-size: 11px; }
+  .rule { color: var(--muted); font-size: 12px; margin: 4px 0 0 0; }
+  .culprit { color: var(--down); font-size: 12px; }
   footer { color: var(--muted); font-size: 11px; margin-top: 24px; line-height: 1.6; }
 </style>
 </head>
@@ -134,18 +156,26 @@
   cada sistema é a <strong>medida nos dados</strong>, não a configurada. O horário de "fim"
   de um incidente é quando a recuperação foi detectada; a amostragem não permite precisar
   o instante exato do retorno.
+  Sistemas medidos por <strong>mais de um endpoint</strong> (ex: página inicial + API) só
+  contam como no ar numa rodada se <strong>todos</strong> os endpoints responderam OK.
+  Quando o <strong>Cloudflare</strong> responde com o desafio anti-bot, a requisição não chega ao
+  sistema: a rodada fica <strong>sem medição</strong> (cinza), não conta como no ar nem como fora
+  e reduz a cobertura.
 </div>
 
-{% for item in targets_data %}
-{% set t = item.target %}
+{% for item in systems_data %}
+{% set sys = item.system %}
 {% set status = item.status %}
+{% set multi = item.endpoints | length > 1 %}
 <div class="card">
   <div class="target-header">
     <div>
-      <div class="target-name">{{ t.name }}</div>
-      <div class="target-url">{{ t.url }}</div>
+      <div class="target-name">{{ sys.name }}</div>
+      {% if not multi %}<div class="target-url">{{ sys.endpoints[0].url }}</div>{% endif %}
     </div>
-    {% if status is none %}
+    {% if item.blocked_since_local %}
+      <span class="badge blocked">BLOQUEIO CLOUDFLARE desde {{ item.blocked_since_local | fmt_dt }}</span>
+    {% elif status is none %}
       <span class="badge unknown">SEM DADOS</span>
     {% elif status.up %}
       <span class="badge up">ONLINE</span>
@@ -154,20 +184,83 @@
     {% endif %}
   </div>
 
-  {% if status is not none %}
+  {% if item.last_round_local %}
   <div class="target-url">
-    Última checagem: {{ item.status_last_checked_local | fmt_dt }}
-    {% if status.last_status_code %} · HTTP {{ status.last_status_code }}{% endif %}
-    {% if status.last_error %} · {{ status.last_error }}{% endif %}
+    Última rodada: {{ item.last_round_local | fmt_dt }}
+    {% if not multi %}
+      {% set ep = item.endpoints[0] %}
+      {% if ep.latest_blocked %} · desafio do Cloudflare (sem medição)
+      {% else %}
+        {% if ep.latest and ep.latest.status_code %} · HTTP {{ ep.latest.status_code }}{% endif %}
+        {% if ep.latest and ep.latest.error %} · {{ ep.latest.error }}{% endif %}
+      {% endif %}
+    {% elif item.blocked_labels %}
+      · bloqueado: {{ item.blocked_labels | join(", ") }}
+    {% elif item.down_labels and not status.up %}
+      · <span class="culprit">fora: {{ item.down_labels | join(", ") }}</span>
+    {% endif %}
     · cadência medida: {{ item.interval_label }}
   </div>
   {% endif %}
 
-  {% if item.also_accept %}
+  {% if multi %}
+  <div class="table-wrap">
+  <table class="endpoints">
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Agora</th>
+        <th>Uptime do endpoint no mês</th>
+        <th>Aceita como no ar</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ep in item.endpoints %}
+      <tr>
+        <td>
+          <div class="ep-label">{{ ep.target.label }}</div>
+          <div class="ep-url">{{ ep.target.url }}</div>
+        </td>
+        <td>
+          {% if ep.latest is none %}
+            <span class="ep-detail">sem dados</span>
+          {% elif ep.latest_blocked %}
+            <span class="ep-blocked">BLOQUEIO CLOUDFLARE</span>
+            <div class="ep-detail">desafio anti-bot, sem medição</div>
+          {% else %}
+            <span class="{{ 'ep-ok' if ep.latest.success else 'ep-down' }}">{{ "OK" if ep.latest.success else "FALHA" }}</span>
+            <div class="ep-detail">
+              {% if ep.latest.status_code %}HTTP {{ ep.latest.status_code }}{% endif %}
+              {% if ep.latest.error %} · {{ ep.latest.error }}{% endif %}
+            </div>
+          {% endif %}
+        </td>
+        <td>{{ ep.month_uptime_pct | fmt_pct }}</td>
+        <td>HTTP {{ ep.accepted_label }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="rule">
+    A disponibilidade abaixo é a do <strong>sistema</strong>: numa rodada, ele só conta como no ar se
+    <strong>todos</strong> os endpoints acima responderam OK. Basta um cair para o sistema contar como fora.
+  </p>
+  {% endif %}
+
+  {% for ep in item.endpoints if ep.also_accept %}
   <div class="note-accept">
-    Critério ajustado: HTTP {{ item.also_accept | join(", ") }} conta como "no ar" para este
-    sistema (o WAF bloqueia o IP do monitor, então esse código apenas confirma que o serviço
-    está respondendo — não que a página final carregou).
+    Critério ajustado{% if multi %} em <strong>{{ ep.target.label }}</strong>{% endif %}:
+    HTTP {{ ep.also_accept | join(", ") }} também conta como "no ar" (config.yaml → also_accept).
+  </div>
+  {% endfor %}
+
+  {% if item.blocked_rounds_month %}
+  <div class="note-blocked">
+    <strong>{{ item.blocked_rounds_month }} rodada(s) do mês sem medição</strong>: o Cloudflare respondeu
+    com o desafio anti-bot e a requisição do monitor não chegou ao sistema. Essas rodadas não contam
+    como no ar nem como fora do ar: ficam fora do uptime, e a cobertura mostra o tamanho da lacuna.
+    Para medir de verdade, o MEC precisa liberar o monitor no Cloudflare.
   </div>
   {% endif %}
 
@@ -176,7 +269,7 @@
     <div class="uptime-stat">
       <div class="label">{{ s.label }}</div>
       <div class="value">{{ s.uptime_pct | fmt_pct }}</div>
-      <div class="count">{{ s.successful_checks }}/{{ s.total_checks }} checagens</div>
+      <div class="count">{{ s.successful_checks }}/{{ s.total_checks }} {{ "rodadas" if multi else "checagens" }}</div>
       <div class="count{% if s.coverage_pct is not none and s.coverage_pct < 95 %} coverage-low{% endif %}">
         cobertura {{ s.coverage_pct | fmt_pct }}
       </div>
@@ -185,7 +278,22 @@
   </div>
 
   {% if item.sla_summary %}
-    {% if item.sla_summary.met %}
+    {% set low_coverage = item.month_coverage_pct is not none and item.month_coverage_pct < 95 %}
+    {% if low_coverage and item.sla_definitely_missed %}
+    <div class="sla-box not-met">
+      SLA NÃO cumprido no mês corrente, mesmo com cobertura de apenas {{ item.month_coverage_pct | fmt_pct }}:
+      o downtime já medido passa da margem que a meta de {{ item.sla_summary.target_pct }}% permite no mês
+      inteiro. Cálculo de glosa ainda não implementado — depende da cláusula contratual.
+    </div>
+    {% elif low_coverage %}
+    {# Com pouca cobertura, o percentual não diz se o SLA foi cumprido: um
+       "cumprido" sobre 2 checagens seria tão enganoso quanto um descumprido. #}
+    <div class="sla-box unset">
+      SLA não apurável no mês corrente: uptime de {{ item.sla_summary.actual_pct | fmt_pct }} nas rodadas
+      medidas, mas a cobertura é de apenas {{ item.month_coverage_pct | fmt_pct }} — insuficiente para
+      afirmar se a meta de {{ item.sla_summary.target_pct }}% foi cumprida ou para embasar glosa.
+    </div>
+    {% elif item.sla_summary.met %}
     <div class="sla-box met">
       SLA cumprido no mês corrente: {{ item.sla_summary.actual_pct | fmt_pct }} ≥ meta de {{ item.sla_summary.target_pct }}%
     </div>
@@ -194,34 +302,34 @@
       SLA NÃO cumprido no mês corrente: {{ item.sla_summary.actual_pct | fmt_pct }} &lt; meta de {{ item.sla_summary.target_pct }}%
       (déficit de {{ "%.2f"|format(item.sla_summary.deficit_pct) }} p.p.).
       Cálculo de glosa ainda não implementado — depende da cláusula contratual.
-      {% if item.month_coverage_pct is not none and item.month_coverage_pct < 95 %}
-      <br><strong>Atenção:</strong> a cobertura de dados do mês é de apenas
-      {{ item.month_coverage_pct | fmt_pct }}; este número não é suficiente para embasar glosa.
-      {% endif %}
     </div>
     {% endif %}
+  {% elif sla_configured %}
+    <div class="sla-box unset">SLA não apurável no mês corrente: nenhuma rodada mediu o sistema.</div>
   {% else %}
     <div class="sla-box unset">Meta de SLA não configurada (config.yaml → sla.target_pct).</div>
   {% endif %}
 
   {% if item.sparkline %}
   <div class="sparkline">
-    <div class="label">Últimas {{ item.sparkline | length }} checagens (mais recente à direita)</div>
+    <div class="label">Últimas {{ item.sparkline | length }} {{ "rodadas do sistema" if multi else "checagens" }} (mais recente à direita · verde = no ar, vermelho = fora, cinza = bloqueio Cloudflare)</div>
     <svg width="100%" height="24" viewBox="0 0 {{ item.sparkline | length * 7 }} 24" preserveAspectRatio="none">
-      {% for ok in item.sparkline %}
+      {% for state in item.sparkline %}
       <rect x="{{ loop.index0 * 7 }}" y="0" width="5" height="24"
-            fill="{{ '#16a34a' if ok else '#dc2626' }}" />
+            fill="{{ {'ok': '#16a34a', 'down': '#dc2626', 'blocked': '#9ca3af'}[state] }}" />
       {% endfor %}
     </svg>
   </div>
   {% endif %}
 
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
         <th>Incidente (início)</th>
         <th>Recuperação detectada</th>
-        <th>Checagens com falha</th>
+        {% if multi %}<th>Endpoint(s) com falha</th>{% endif %}
+        <th>{{ "Rodadas" if multi else "Checagens" }} com falha</th>
         <th>Downtime contabilizado</th>
       </tr>
     </thead>
@@ -230,14 +338,16 @@
       <tr>
         <td>{{ inc.start | fmt_dt }}</td>
         <td>{% if inc.recovered_at %}{{ inc.recovered_at | fmt_dt }}{% else %}<span class="ongoing">em andamento</span>{% endif %}</td>
+        {% if multi %}<td>{{ inc.failed_labels | join(", ") }}</td>{% endif %}
         <td>{{ inc.failed_checks }}</td>
         <td>{{ inc.downtime }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="empty">Nenhum incidente registrado na janela.</td></tr>
+      <tr><td colspan="{{ 5 if multi else 4 }}" class="empty">Nenhum incidente registrado na janela.</td></tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endfor %}
 

@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 DEFAULT_TIMEZONE = "America/Sao_Paulo"
 MIN_INTERVAL_SECONDS = 5
+DEFAULT_MAIN_LABEL = "Página inicial"
 
 
 @dataclass
@@ -28,6 +29,22 @@ class Target:
     # Fica registrado por alvo (e exibido no painel) para a apuração ser
     # auditável.
     also_accept: frozenset[int] = frozenset()
+    # Sistema ao qual este endpoint pertence (ver System) e o rótulo dele
+    # dentro do sistema, ex: "Página inicial", "API (backend)".
+    system_key: str = ""
+    label: str = DEFAULT_MAIN_LABEL
+
+
+@dataclass
+class System:
+    """Um sistema do painel, medido por um ou mais endpoints. Ele só conta
+    como "no ar" numa rodada quando TODOS os endpoints responderam OK: a
+    página inicial pode vir de cache enquanto a API por trás está fora, e é
+    exatamente essa queda que o usuário sente."""
+
+    key: str
+    name: str
+    endpoints: list[Target]
 
 
 @dataclass
@@ -54,7 +71,10 @@ class Config:
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     check: CheckSettings = field(default_factory=CheckSettings)
     sla: SlaSettings = field(default_factory=SlaSettings)
+    # Lista plana de todos os endpoints (o que o daemon checa) e o
+    # agrupamento deles por sistema (o que o painel apura).
     targets: list[Target] = field(default_factory=list)
+    systems: list[System] = field(default_factory=list)
 
 
 class ConfigError(Exception):
@@ -121,6 +141,37 @@ def _validate_url(url: str, target_key: str) -> str:
     return url
 
 
+def _parse_endpoint(
+    raw, seen_keys: set[str], system_key: str | None, system_name: str | None
+) -> Target:
+    """Lê um endpoint. Sem `system_key`, é o endpoint principal de um sistema
+    (define a chave e o nome do sistema); com ela, é um `extra_checks`."""
+    is_main = system_key is None
+    required = ("key", "name", "url") if is_main else ("key", "label", "url")
+    missing = [name for name in required if not isinstance(raw, dict) or name not in raw]
+    if missing:
+        where = "em 'targets'" if is_main else f"em 'extra_checks' do sistema '{system_key}'"
+        raise ConfigError(f"Endpoint inválido {where} (faltando campo {missing}): {raw}")
+    key = raw["key"]
+
+    # A chave identifica o histórico no banco: repetida, dois endpoints
+    # misturariam as checagens.
+    if key in seen_keys:
+        raise ConfigError(f"Chave duplicada em 'targets'/'extra_checks': {key}")
+    seen_keys.add(key)
+
+    label = raw.get("label") or DEFAULT_MAIN_LABEL
+    return Target(
+        key=key,
+        name=raw["name"] if is_main else f"{system_name} — {label}",
+        url=_validate_url(raw["url"], key),
+        expected_status=_parse_expected_status(raw.get("expected_status"), key),
+        also_accept=_parse_also_accept(raw.get("also_accept"), key),
+        system_key=key if is_main else system_key,
+        label=label,
+    )
+
+
 def load_config(path: str | Path | None = None) -> Config:
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
     if not config_path.exists():
@@ -170,29 +221,21 @@ def load_config(path: str | Path | None = None) -> Config:
 
     seen_keys: set[str] = set()
     targets: list[Target] = []
+    systems: list[System] = []
     for t in targets_raw:
-        try:
-            key = t["key"]
-            name = t["name"]
-            url = t["url"]
-        except (KeyError, TypeError) as exc:
-            raise ConfigError(f"Sistema inválido em 'targets' (faltando campo {exc}): {t}") from exc
-
-        if key in seen_keys:
-            raise ConfigError(f"Chave de sistema duplicada em 'targets': {key}")
-        seen_keys.add(key)
-
-        targets.append(
-            Target(
-                key=key,
-                name=name,
-                url=_validate_url(url, key),
-                expected_status=_parse_expected_status(t.get("expected_status"), key),
-                also_accept=_parse_also_accept(t.get("also_accept"), key),
+        main = _parse_endpoint(t, seen_keys, system_key=None, system_name=None)
+        endpoints = [main]
+        extras_raw = t.get("extra_checks") or []
+        if not isinstance(extras_raw, list):
+            raise ConfigError(f"'extra_checks' do sistema '{main.key}' deve ser uma lista.")
+        for extra in extras_raw:
+            endpoints.append(
+                _parse_endpoint(extra, seen_keys, system_key=main.key, system_name=main.name)
             )
-        )
+        targets.extend(endpoints)
+        systems.append(System(key=main.key, name=main.name, endpoints=endpoints))
 
-    return Config(database=database, check=check, sla=sla, targets=targets)
+    return Config(database=database, check=check, sla=sla, targets=targets, systems=systems)
 
 
 def resolve_db_url(config: Config) -> str:

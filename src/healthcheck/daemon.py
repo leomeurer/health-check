@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .checker import check_target
 from .config import Config, load_config, resolve_db_url
-from .db import Check, init_db, make_engine, make_session_factory, utcnow
+from .db import CLOUDFLARE_CHALLENGE, Check, init_db, make_engine, make_session_factory, utcnow
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +65,12 @@ def run_round(config: Config, session_factory) -> None:
                     error=result.error,
                 )
             )
-            status = "OK" if result.success else f"FALHA ({result.error})"
+            if result.success:
+                status = "OK"
+            elif result.error == CLOUDFLARE_CHALLENGE:
+                status = "BLOQUEIO (desafio do Cloudflare, sem medição)"
+            else:
+                status = f"FALHA ({result.error})"
             log.info("%-20s %-6s %s", target.key, status, target.url)
         session.commit()
 
@@ -82,7 +87,8 @@ def main() -> None:
     session_factory = make_session_factory(engine)
 
     log.info(
-        "Iniciando health check: %d sistema(s), intervalo=%ds, timeout=%ds",
+        "Iniciando health check: %d sistema(s), %d endpoint(s), intervalo=%ds, timeout=%ds",
+        len(config.systems),
         len(config.targets),
         config.check.interval_seconds,
         config.check.timeout_seconds,

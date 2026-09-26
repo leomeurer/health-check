@@ -19,6 +19,12 @@ SLA por sistema.
   definitivo é só trocar a connection string (`database.url` no
   `config.yaml` ou a env var `HEALTHCHECK_DB_URL`) — o schema usa
   apenas tipos padrão (String, DateTime, Boolean, Integer, Float).
+- **Sistemas com mais de um endpoint**: um sistema pode ter `extra_checks`
+  no `config.yaml` (ex: página inicial + API). O painel mostra todos no
+  mesmo bloco, e o sistema só conta como **no ar numa rodada se todos os
+  endpoints responderam OK**. Motivo: a página inicial pode vir de
+  cache/CDN enquanto o backend está fora — caso real no GPE em 23/09/2026,
+  quando o navegador recebeu 503 e o monitor, só na página, via 200.
 - **Painel**: HTML estático gerado pelo próprio script (sem servidor
   web adicional, sem dependência de CDN externo — importante numa rede
   corporativa/governamental que pode ser restrita).
@@ -63,35 +69,40 @@ Cobrem a aritmética que sustenta a apuração: uptime, cobertura, duração e
 agrupamento de incidentes, fronteira do mês no fuso correto, cadência
 observada e validação de URL.
 
-## Atenção: bloqueio por IP/WAF em alguns sistemas
+## Atenção: bloqueio Cloudflare em alguns sistemas
 
-Ao testar a lista real de sistemas (`config.yaml`) a partir deste
-ambiente de desenvolvimento (que sai à internet por um IP de datacenter),
-4 dos 9 sistemas do MEC responderam **HTTP 403** de forma consistente
-(e-MEC, Sistec, SIMEC, GPEI), mesmo variando User-Agent/Accept/Referer —
-o handshake TLS completa normalmente e quem responde 403 é o próprio
-servidor, não o proxy. Isso é característico de bloqueio por IP/ASN de
-nuvem na WAF (comum em sistemas de governo), não de um simples bot-check
-de headers.
+e-MEC, Sistec, SIMEC, GPEI, MEC Idiomas e Mais Professores ficam atrás do
+**desafio anti-bot do Cloudflare**: ele responde `403` com o cabeçalho
+`cf-mitigated: challenge` (página "Just a moment...") a qualquer cliente que
+não seja um navegador — testado em 25/09/2026 a partir da VM da Oracle e da
+rede da UFSC/RNP, então não é só bloqueio de IP de nuvem. Essa resposta sai
+da borda do Cloudflare **sem a requisição chegar ao sistema**: não prova que
+ele está no ar nem fora.
 
-Verifiquei ainda que o 403 aparece em **todos** os caminhos desses
-sistemas (inclusive `/robots.txt` e `/favicon.ico`), então não há um
-endpoint de health que escape do WAF.
+> Em 19/09/2026 esse 403 foi diagnosticado como resposta do próprio servidor
+> e aceito como "no ar" (`also_accept: [403]`). O diagnóstico estava errado:
+> o painel mostrava esses sistemas online sem medir nada. Foi corrigido em
+> 25/09/2026, junto com o histórico.
 
-**Tratamento adotado (`also_accept: [403]`).** Como o 403 prova que o
-serviço está de pé e respondendo, os 4 alvos bloqueados foram configurados
-para contar o 403 como "no ar". O painel exibe uma nota em cada um desses
-sistemas deixando o critério explícito, para a apuração ser auditável.
-É uma medida de "o serviço responde", não de "a página final carrega".
+**Tratamento adotado.** O checker reconhece o desafio pelo cabeçalho e grava
+a rodada com `error = 'bloqueio_cloudflare'`. Essas rodadas **não contam como
+no ar nem como fora**: ficam fora do uptime, derrubam a cobertura, aparecem
+em cinza e o sistema recebe o selo "BLOQUEIO CLOUDFLARE". Um 403 que *não*
+seja o desafio continua sendo falha.
 
-**Antes de confiar no painel para apuração de glosa**, rode
-`python -m healthcheck.daemon --once` a partir do servidor real onde o
-daemon vai ficar hospedado. Se esse servidor **não** estiver em nuvem
-pública, esses sistemas passarão a responder 200 normalmente — e aí o
-`also_accept: [403]` deve ser **removido**, senão um 403 real (erro de
-fato) ficaria mascarado como disponível. O caminho ideal continua sendo
-pedir à equipe de cada sistema a liberação do IP do monitor na WAF e então
-tirar o 403 da configuração.
+**Histórico.** As checagens antigas com 403 desses alvos foram
+reclassificadas com:
+
+```bash
+python -m healthcheck.reclassify_cloudflare           # mostra o que mudaria
+python -m healthcheck.reclassify_cloudflare --apply   # grava (idempotente)
+```
+
+**Para medir de verdade**, a equipe do MEC que administra o Cloudflare
+precisa criar uma regra **Skip** no WAF para o monitor (IP `157.151.7.222`,
+um cabeçalho secreto ou um caminho de health check). A partir daí as
+respostas reais passam a contar sozinhas, sem mudar nada aqui — e, se o
+servidor cair, o próprio Cloudflare responde 502/503/504, que é detectado.
 
 Também identifiquei que a URL informada para o Inep (`https://inep.gov.br`)
 não resolve (domínio inexistente); usei `https://www.gov.br/inep/pt-br`

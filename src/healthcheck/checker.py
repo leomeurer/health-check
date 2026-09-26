@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import requests
 
 from .config import Target
-from .db import ERROR_MAX_LEN
+from .db import CLOUDFLARE_CHALLENGE, ERROR_MAX_LEN
 
 
 @dataclass
@@ -34,6 +34,14 @@ def _status_accepted(status_code: int, target: Target) -> bool:
     return status_code in target.expected_status
 
 
+def _is_cloudflare_challenge(response: requests.Response) -> bool:
+    """O desafio anti-bot do Cloudflare é respondido pela BORDA do Cloudflare,
+    sem a requisição chegar ao servidor do sistema: ele não diz nada sobre o
+    sistema estar no ar ou fora. O Cloudflare marca essas respostas com
+    `cf-mitigated: challenge`."""
+    return response.headers.get("cf-mitigated", "").strip().lower() == "challenge"
+
+
 def check_target(target: Target, timeout_seconds: int) -> CheckResult:
     start = time.monotonic()
     try:
@@ -51,6 +59,11 @@ def check_target(target: Target, timeout_seconds: int) -> CheckResult:
         return CheckResult(False, None, None, _truncate(f"request_error: {exc}"))
 
     elapsed_ms = (time.monotonic() - start) * 1000
+    if _is_cloudflare_challenge(response):
+        # Não é "no ar" nem "fora do ar": é uma rodada sem medição. Vai para o
+        # banco como success=False com este marcador, e a apuração (sla.py)
+        # tira essas rodadas do uptime em vez de contá-las como queda.
+        return CheckResult(False, response.status_code, elapsed_ms, CLOUDFLARE_CHALLENGE)
     success = _status_accepted(response.status_code, target)
     if success:
         error = None

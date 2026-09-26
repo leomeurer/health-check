@@ -16,14 +16,21 @@ from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 
 from .config import PROJECT_ROOT, load_config, resolve_db_url
-from .db import Check, init_db, make_engine, make_session_factory, utcnow
+from .db import CLOUDFLARE_CHALLENGE, Check, init_db, make_engine, make_session_factory, utcnow
 from .sla import (
+    EndpointRow,
+    blocked_since,
+    combine_endpoint_rows,
     compute_current_status,
     compute_incidents,
+    failed_keys_between,
     format_duration,
+    measured_rows,
+    month_length_seconds,
     month_window,
     observed_interval_seconds,
     sla_compliance,
+    sla_definitely_missed,
     summarize_window,
     to_local,
     window_bounds,
@@ -37,6 +44,16 @@ INCIDENTS_SHOWN = 10
 
 def _fmt_pct(pct: float | None) -> str:
     return "-" if pct is None else f"{pct:.2f}%"
+
+
+def _accepted_label(target) -> str:
+    """Códigos que contam como "no ar" para o endpoint, como exibido no painel."""
+    if target.expected_status is None:
+        base = "200–399"
+    else:
+        base = ", ".join(str(code) for code in sorted(target.expected_status))
+    extra = sorted(target.also_accept - (target.expected_status or frozenset()))
+    return base + "".join(f", {code}" for code in extra)
 
 
 def build_report_data(config, session_factory, now) -> dict:
@@ -54,33 +71,63 @@ def build_report_data(config, session_factory, now) -> dict:
         ("Mês corrente", month_start),
     ]
 
-    targets_data = []
+    systems_data = []
     with session_factory() as session:
-        for target in config.targets:
-            rows = list(
-                session.execute(
-                    select(Check.checked_at, Check.success)
-                    .where(
-                        Check.target_key == target.key,
-                        Check.checked_at >= lookback_start,
+        for system in config.systems:
+            rows_by_endpoint = {}
+            endpoints_data = []
+            for target in system.endpoints:
+                rows = [
+                    EndpointRow(
+                        checked_at=row.checked_at,
+                        success=row.success,
+                        blocked=row.error == CLOUDFLARE_CHALLENGE,
                     )
-                    .order_by(Check.checked_at.asc())
-                ).all()
-            )
+                    for row in session.execute(
+                        select(Check.checked_at, Check.success, Check.error)
+                        .where(
+                            Check.target_key == target.key,
+                            Check.checked_at >= lookback_start,
+                        )
+                        .order_by(Check.checked_at.asc())
+                    ).all()
+                ]
+                rows_by_endpoint[target.key] = rows
 
-            latest_detail = session.execute(
-                select(Check.status_code, Check.error)
-                .where(Check.target_key == target.key)
-                .order_by(Check.checked_at.desc())
-                .limit(1)
-            ).first()
+                latest = session.execute(
+                    select(Check.checked_at, Check.success, Check.status_code, Check.error)
+                    .where(Check.target_key == target.key)
+                    .order_by(Check.checked_at.desc())
+                    .limit(1)
+                ).first()
 
-            interval = observed_interval_seconds(rows, config.check.interval_seconds)
-            status = compute_current_status(
-                rows,
-                last_status_code=latest_detail.status_code if latest_detail else None,
-                last_error=latest_detail.error if latest_detail else None,
-            )
+                month_rows = [
+                    row for row in rows if row.checked_at >= month_start and not row.blocked
+                ]
+                month_ok = sum(1 for row in month_rows if row.success)
+                endpoints_data.append(
+                    {
+                        "target": target,
+                        "latest": latest,
+                        "latest_blocked": bool(latest) and latest.error == CLOUDFLARE_CHALLENGE,
+                        "latest_local": to_local(latest.checked_at, tz_name) if latest else None,
+                        "month_uptime_pct": month_ok / len(month_rows) * 100 if month_rows else None,
+                        "accepted_label": _accepted_label(target),
+                        "also_accept": sorted(target.also_accept),
+                    }
+                )
+
+            # A apuração do sistema é feita sobre as rodadas consolidadas: uma
+            # falha de QUALQUER endpoint derruba o sistema naquela rodada.
+            all_rows = combine_endpoint_rows(rows_by_endpoint)
+            labels = {t.key: t.label for t in system.endpoints}
+
+            # A cadência é a do monitor, então conta todas as rodadas; o resto
+            # da apuração só enxerga as que mediram (bloqueio = lacuna).
+            interval = observed_interval_seconds(all_rows, config.check.interval_seconds)
+            rows = measured_rows(all_rows)
+            status = compute_current_status(rows)
+            blocked_from = blocked_since(all_rows)
 
             summaries = []
             month_summary = None
@@ -91,15 +138,24 @@ def build_report_data(config, session_factory, now) -> dict:
                 if label == "Mês corrente":
                     month_summary = summary
 
-            targets_data.append(
+            systems_data.append(
                 {
-                    "target": target,
+                    "system": system,
+                    "endpoints": endpoints_data,
                     "status": status,
+                    "blocked_since_local": to_local(blocked_from, tz_name),
+                    "blocked_labels": [labels[k] for k in sorted(all_rows[-1].blocked_keys)]
+                    if blocked_from
+                    else [],
+                    "blocked_rounds_month": sum(
+                        1 for row in all_rows if row.blocked and row.checked_at >= month_start
+                    ),
+                    "down_labels": [labels[k] for k in sorted(rows[-1].failed_keys)] if rows else [],
                     "status_down_since_local": to_local(status.down_since, tz_name)
                     if status
                     else None,
-                    "status_last_checked_local": to_local(status.last_checked_at, tz_name)
-                    if status
+                    "last_round_local": to_local(all_rows[-1].checked_at, tz_name)
+                    if all_rows
                     else None,
                     "summaries": summaries,
                     "incidents": [
@@ -108,23 +164,36 @@ def build_report_data(config, session_factory, now) -> dict:
                             "recovered_at": to_local(inc.recovered_at, tz_name),
                             "failed_checks": inc.failed_checks,
                             "downtime": format_duration(inc.downtime_seconds),
+                            "failed_labels": [
+                                labels.get(k, k)
+                                for k in sorted(failed_keys_between(rows, inc.start, inc.recovered_at))
+                            ],
                         }
                         for inc in compute_incidents(rows, interval, limit=INCIDENTS_SHOWN)
                     ],
-                    "sparkline": [row.success for row in rows[-SPARKLINE_MAX_TICKS:]],
+                    "sparkline": [
+                        "blocked" if row.blocked else ("ok" if row.success else "down")
+                        for row in all_rows[-SPARKLINE_MAX_TICKS:]
+                    ],
                     "sla_summary": sla_compliance(
                         month_summary.uptime_pct if month_summary else None, config.sla
                     ),
                     "month_coverage_pct": month_summary.coverage_pct if month_summary else None,
+                    "sla_definitely_missed": bool(month_summary)
+                    and sla_definitely_missed(
+                        month_summary.total_checks - month_summary.successful_checks,
+                        interval,
+                        month_length_seconds(now, tz_name),
+                        config.sla.target_pct,
+                    ),
                     "interval_label": format_duration(interval),
-                    "also_accept": sorted(target.also_accept),
                 }
             )
 
     return {
         "generated_at": to_local(now, tz_name),
         "timezone": tz_name,
-        "targets_data": targets_data,
+        "systems_data": systems_data,
         "sla_configured": config.sla.target_pct is not None,
         "lookback_days": LOOKBACK_DAYS,
     }

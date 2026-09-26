@@ -20,6 +20,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from .config import PROJECT_ROOT
 
 ERROR_MAX_LEN = 500
+# Valor da coluna `error` quando o Cloudflare respondeu com o desafio
+# anti-bot em vez de repassar a requisição ao sistema. Essas linhas são
+# gravadas com success=False, mas NÃO são queda: a apuração as trata como
+# rodada sem medição (ver sla.py). Fica como marcador na coluna existente
+# para não exigir migração de schema (SQLite hoje, Oracle depois).
+CLOUDFLARE_CHALLENGE = "bloqueio_cloudflare"
 
 
 class Base(DeclarativeBase):

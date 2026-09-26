@@ -46,6 +46,99 @@ class CheckRow(Protocol):
     success: bool
 
 
+@dataclass(frozen=True)
+class EndpointRow:
+    """Checagem de um endpoint como a apuração enxerga: `blocked` indica que
+    o Cloudflare respondeu com o desafio anti-bot, ou seja, a rodada não
+    mediu nada (nem sucesso, nem queda)."""
+
+    checked_at: datetime
+    success: bool
+    blocked: bool = False
+
+
+@dataclass(frozen=True)
+class SystemRow:
+    """Resultado consolidado de uma rodada para um sistema com vários
+    endpoints: só é sucesso se todos os endpoints checados na rodada
+    responderam OK."""
+
+    checked_at: datetime
+    success: bool
+    failed_keys: frozenset[str]
+    # Rodada sem medição: algum endpoint caiu no desafio do Cloudflare e
+    # nenhum outro falhou de verdade. Fica fora do uptime e dos incidentes.
+    blocked: bool = False
+    blocked_keys: frozenset[str] = frozenset()
+
+
+def combine_endpoint_rows(rows_by_endpoint: dict[str, Sequence[CheckRow]]) -> list[SystemRow]:
+    """Junta as checagens dos endpoints de um sistema por rodada. O daemon
+    grava todos os endpoints de uma rodada com o MESMO `checked_at`, então o
+    horário identifica a rodada.
+
+    Endpoint sem registro numa rodada (ex: incluído depois no config) não
+    entra naquela rodada: antes de a API ser monitorada, o sistema era medido
+    só pela página inicial, e contar a ausência como falha criaria downtime
+    que ninguém observou.
+
+    Uma falha real de qualquer endpoint prevalece sobre um bloqueio: se a API
+    respondeu 503, o sistema estava fora, mesmo que a página tenha caído no
+    desafio do Cloudflare."""
+    failed: dict[datetime, set[str]] = {}
+    blocked: dict[datetime, set[str]] = {}
+    for key, rows in rows_by_endpoint.items():
+        for row in rows:
+            failed.setdefault(row.checked_at, set())
+            blocked.setdefault(row.checked_at, set())
+            if getattr(row, "blocked", False):
+                blocked[row.checked_at].add(key)
+            elif not row.success:
+                failed[row.checked_at].add(key)
+    return [
+        SystemRow(
+            checked_at=at,
+            success=not failed[at] and not blocked[at],
+            failed_keys=frozenset(failed[at]),
+            blocked=not failed[at] and bool(blocked[at]),
+            blocked_keys=frozenset(blocked[at]),
+        )
+        for at in sorted(failed)
+    ]
+
+
+def measured_rows(rows: Sequence[SystemRow]) -> list[SystemRow]:
+    """Só as rodadas que de fato mediram o sistema. As bloqueadas viram
+    lacuna: a cobertura cai e o uptime não finge um resultado."""
+    return [row for row in rows if not row.blocked]
+
+
+def blocked_since(rows_asc: Sequence[SystemRow]) -> datetime | None:
+    """Se a rodada mais recente está bloqueada, desde quando (início da
+    sequência de rodadas bloqueadas). None se a última rodada mediu."""
+    if not rows_asc or not rows_asc[-1].blocked:
+        return None
+    since = rows_asc[-1].checked_at
+    for row in reversed(rows_asc[:-1]):
+        if not row.blocked:
+            break
+        since = row.checked_at
+    return since
+
+
+def failed_keys_between(
+    rows_asc: Sequence[SystemRow], start: datetime, end: datetime | None
+) -> set[str]:
+    """Endpoints que falharam em alguma rodada de [start, end) — usado para
+    dizer, em cada incidente, QUAL parte do sistema caiu."""
+    return {
+        key
+        for row in rows_asc
+        if row.checked_at >= start and (end is None or row.checked_at < end)
+        for key in row.failed_keys
+    }
+
+
 @dataclass
 class CurrentStatus:
     up: bool
@@ -198,6 +291,28 @@ def month_window(now_utc: datetime, tz_name: str) -> tuple[datetime, datetime]:
     local_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
     return start_utc, now_utc
+
+
+def month_length_seconds(now_utc: datetime, tz_name: str) -> float:
+    """Duração do mês calendário corrente, no fuso do contrato."""
+    tz = ZoneInfo(tz_name)
+    local_now = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = (start + timedelta(days=32)).replace(day=1)
+    return (end.astimezone(timezone.utc) - start.astimezone(timezone.utc)).total_seconds()
+
+
+def sla_definitely_missed(
+    failed_checks: int, interval_seconds: float, month_seconds: float, target_pct: float | None
+) -> bool:
+    """Com cobertura baixa não dá para dizer que a meta foi cumprida — mas dá
+    para dizer que NÃO foi, quando o downtime já medido passa sozinho da
+    margem que a meta permite no mês inteiro (ex: 98% num mês de 30 dias =
+    14h24min). Nada que falte medir consegue desfazer isso."""
+    if target_pct is None or interval_seconds <= 0:
+        return False
+    allowed_downtime = (1 - target_pct / 100) * month_seconds
+    return failed_checks * interval_seconds > allowed_downtime
 
 
 def to_local(dt: datetime | None, tz_name: str) -> datetime | None:
