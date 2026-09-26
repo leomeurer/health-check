@@ -5,4 +5,3 @@ venv/
 data/*.db
 data/*.db-journal
 data/report.html
-site/

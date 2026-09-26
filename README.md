@@ -8,9 +8,9 @@ SLA por sistema.
 ## Decisões registradas
 
 - **Execução**: daemon Python de longa duração (loop de 60s com
-  correção de drift), rodando via `systemd` em servidor/VM próprio —
-  não usa GitHub Actions porque o cron do Actions não garante
-  granularidade de 1 minuto.
+  correção de drift), rodando via `systemd` na VM da Oracle Cloud, que
+  também publica o painel (nginx). Agendadores do tipo cron "melhor
+  esforço" não garantem a granularidade de 1 minuto que a apuração exige.
 - **Critério de downtime**: **1 falha já conta como indisponível**
   (sem tolerância de N falhas consecutivas). Isso é o que define o
   início/fim de um incidente para fins de apuração de SLA.
@@ -186,9 +186,8 @@ publicá-lo numa VM gratuita da Oracle Cloud.
 
 ## Deploy na Oracle Cloud Always Free (checagem de 1 min + painel público)
 
-Isto resolve, ao mesmo tempo, a checagem de 1 em 1 minuto de verdade (o
-GitHub Actions não garante isso) e um link fixo para ver o painel do
-celular. A VM Always Free da Oracle nunca expira e não tem custo
+Isto resolve, ao mesmo tempo, a checagem de 1 em 1 minuto de verdade e
+um link fixo para ver o painel do celular. A VM Always Free da Oracle nunca expira e não tem custo
 recorrente.
 
 **1. Criar a VM** (no console da Oracle Cloud — isso só você consegue

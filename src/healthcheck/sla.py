@@ -169,8 +169,8 @@ class WindowSummary:
 def observed_interval_seconds(rows: Sequence[CheckRow], fallback_seconds: int) -> float:
     """Intervalo real entre checagens, medido pela mediana dos intervalos
     observados. É o que vale para a apuração: o agendador pode não ter
-    rodado na cadência configurada (o cron do GitHub Actions, por exemplo,
-    é "melhor esforço")."""
+    rodado na cadência configurada (daemon parado, VM sobrecarregada ou
+    reiniciada)."""
     if len(rows) < 2:
         return float(fallback_seconds)
     gaps = [
